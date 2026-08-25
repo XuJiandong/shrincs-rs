@@ -17,22 +17,23 @@
 //! Three parameter sets are provided as distinct marker types implementing
 //! [`Params`]: [`SHRINCS_L`], [`SHRINCS_B`], and [`SHRINCS_B32`]. Because each
 //! is a separate type, all three coexist in a single binary and may be used
-//! simultaneously.
+//! simultaneously. [`SHRINCS_B`] is the recommended default: it has the
+//! smallest signature size of the three parameter sets.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use shrincs::{constants::Params, shrincs, SHRINCS_L};
+//! use shrincs::{constants::Params, shrincs, SHRINCS_B};
 //!
 //! let mut pk = shrincs::PublicKey::default();
 //! let mut sk = shrincs::SecretKey::default();
 //! let mut state = shrincs::State::default();
 //!
-//! shrincs::key_gen::<SHRINCS_L>(&mut pk, &mut sk, &mut state).unwrap();
+//! shrincs::key_gen::<SHRINCS_B>(&mut pk, &mut sk, &mut state).unwrap();
 //!
 //! let msg = b"hello world";
-//! let sig = shrincs::sign_stateful::<SHRINCS_L>(msg, &mut sk, &mut state).unwrap();
-//! assert!(shrincs::verify::<SHRINCS_L>(msg, &sig, &pk));
+//! let sig = shrincs::sign_stateful::<SHRINCS_B>(msg, &mut sk, &mut state).unwrap();
+//! assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
 //! ```
 
 #![no_std]
@@ -60,7 +61,7 @@ pub mod rng;
 pub use constants::{address_types, Params, SHRINCS_B, SHRINCS_B32, SHRINCS_L};
 
 // Re-export the top-level API at the crate root so callers can write
-// `shrincs::key_gen::<SHRINCS_L>(…)` instead of `shrincs::shrincs::key_gen(…)`.
+// `shrincs::key_gen::<SHRINCS_B>(…)` instead of `shrincs::shrincs::key_gen(…)`.
 #[cfg(feature = "std")]
 pub use shrincs::{key_gen, restore, sign_stateful, sign_stateless};
 pub use shrincs::{verify, verify_stateful, verify_stateless, PublicKey, SecretKey, State};
