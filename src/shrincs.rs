@@ -292,7 +292,7 @@ pub fn verify_stateful<P: Params>(message: &[u8], sig: &[u8], pk: &PublicKey) ->
     let uxmss_sig = &sig[P::N..];
 
     let auth_len = sig.len() - P::N - P::WOTS_SIGN_LEN;
-    if auth_len % P::N != 0 {
+    if !auth_len.is_multiple_of(P::N) {
         return false;
     }
 

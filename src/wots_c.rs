@@ -40,14 +40,14 @@ pub fn base_w<P: Params>(message: &[u8], out: &mut [u8]) {
     let mut bits: i32 = 0;
     let mut total: i32 = 0;
 
-    for i in 0..P::L {
+    for out_byte in out.iter_mut().take(P::L) {
         if bits == 0 {
             total = message[in_idx] as i32;
             in_idx += 1;
             bits = 8;
         }
         bits -= w_log;
-        out[i] = ((total >> bits) & w_mod) as u8;
+        *out_byte = ((total >> bits) & w_mod) as u8;
     }
 }
 
@@ -288,7 +288,7 @@ pub fn wots_sign<P: Params>(
     sig[offset..offset + 4].copy_from_slice(&ctr.to_be_bytes());
     offset += 4;
 
-    for i in 0..P::L {
+    for (i, &msg_digit) in msg.iter().enumerate().take(P::L) {
         set_type_and_clear(adrs, wots_prf);
         set_key_pair_address(adrs, keypair);
         set_chain_address(adrs, i as u32);
@@ -300,7 +300,7 @@ pub fn wots_sign<P: Params>(
         set_key_pair_address(adrs, keypair);
         set_chain_address(adrs, i as u32);
         let mut tmp = Node::default();
-        chain::<P>(&sk_i, 0, msg[i] as u32, hash_ctx, adrs, &mut tmp);
+        chain::<P>(&sk_i, 0, msg_digit as u32, hash_ctx, adrs, &mut tmp);
         sig[offset..offset + P::N].copy_from_slice(&tmp);
         offset += P::N;
     }
@@ -355,7 +355,7 @@ pub fn wots_pk_from_sig<P: Params>(
     let to_step = (P::W - 1) as u32;
     let mut pk_nodes = Vec::with_capacity(P::L * P::N);
     let mut sig_i = Node::default();
-    for i in 0..P::L {
+    for (i, &msg_digit) in msg.iter().enumerate().take(P::L) {
         set_type_and_clear(adrs, wots_hash);
         set_key_pair_address(adrs, keypair);
         set_chain_address(adrs, i as u32);
@@ -366,8 +366,8 @@ pub fn wots_pk_from_sig<P: Params>(
         let mut pk_i = Node::default();
         chain::<P>(
             &sig_i,
-            msg[i] as u32,
-            to_step - msg[i] as u32,
+            msg_digit as u32,
+            to_step - msg_digit as u32,
             hash_ctx,
             adrs,
             &mut pk_i,

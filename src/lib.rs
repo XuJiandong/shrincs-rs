@@ -61,6 +61,6 @@ pub use constants::{address_types, Params, SHRINCS_B, SHRINCS_B32, SHRINCS_L};
 
 // Re-export the top-level API at the crate root so callers can write
 // `shrincs::key_gen::<SHRINCS_L>(…)` instead of `shrincs::shrincs::key_gen(…)`.
-pub use shrincs::{PublicKey, SecretKey, State, verify, verify_stateful, verify_stateless};
 #[cfg(feature = "std")]
 pub use shrincs::{key_gen, restore, sign_stateful, sign_stateless};
+pub use shrincs::{verify, verify_stateful, verify_stateless, PublicKey, SecretKey, State};

@@ -90,9 +90,23 @@ SHA-256 implementation for CKB-VM). The code binds the C `sha256_init` /
 ## Testing
 
 ```bash
-cargo test --release        # unit tests + tests/ + KAT suites (all 3 parameter sets)
+cargo test --release        # unit tests + tests/ (KAT suites excluded by default)
 cargo build --no-default-features  # no_std verification surface
 ```
+
+The KAT suites (`tests/kat.rs`) are **not** run by default: they are gated
+behind the `kat-tests` cargo feature and must be enabled explicitly:
+
+```bash
+cargo test --release --features kat-tests  # KAT pass/fail suites (all 3 parameter sets)
+```
+
+> ⚠️ **Warning: the KAT suites are very slow.** They sign and verify hundreds
+> of messages across all three parameter sets, and every stateful signature
+> grinds over the digest space, so a full run can take a very long time (a
+> `--release` build is strongly recommended; debug builds are far worse).
+> Only enable `kat-tests` when you specifically want the full known-answer
+> validation.
 
 The test suite ports:
 

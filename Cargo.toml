@@ -8,6 +8,7 @@ license = "MIT"
 [features]
 default = ["std"]
 std = ["dep:getrandom", "dep:aes"]
+kat-tests = []
 
 [dependencies]
 ckb-opt-sha256 = "0.1.0"
