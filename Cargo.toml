@@ -1,0 +1,15 @@
+[package]
+name = "shrincs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust implementation of the SHRINCS post-quantum signature scheme"
+license = "MIT"
+
+[features]
+default = ["std"]
+std = ["dep:getrandom", "dep:aes"]
+
+[dependencies]
+ckb-opt-sha256 = "0.1.0"
+getrandom = { version = "0.2", optional = true }
+aes = { version = "0.8", optional = true }
