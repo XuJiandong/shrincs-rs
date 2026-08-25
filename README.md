@@ -33,6 +33,9 @@ Three parameter sets coexist as distinct marker types implementing
 * [`SHRINCS_B`](shrincs::SHRINCS_B)
 * [`SHRINCS_B32`](shrincs::SHRINCS_B32)
 
+[`SHRINCS_B`](shrincs::SHRINCS_B) is the recommended default: it has the
+smallest signature size of the three parameter sets.
+
 Every parameter (`W`, `L`, `SWN`, `HSF`, `HSL`, `D`, `T`, `B`, `K`, `M_MAX`,
 `H_PRIME`, and the derived signature sizes) is documented in
 `src/constants.rs`.
@@ -54,28 +57,28 @@ shrincs = { path = ".", default-features = false } # verification only
 ## Usage
 
 ```rust
-use shrincs::{shrincs, Params, SHRINCS_L};
+use shrincs::{shrincs, Params, SHRINCS_B};
 
 let mut pk = shrincs::PublicKey::default();
 let mut sk = shrincs::SecretKey::default();
 let mut state = shrincs::State::default();
 
 // Generate keys (std)
-shrincs::key_gen::<SHRINCS_L>(&mut pk, &mut sk, &mut state).unwrap();
+shrincs::key_gen::<SHRINCS_B>(&mut pk, &mut sk, &mut state).unwrap();
 
 let msg = b"hello world";
 
 // Stateful signature
-let sig = shrincs::sign_stateful::<SHRINCS_L>(msg, &mut sk, &mut state).unwrap();
-assert!(shrincs::verify::<SHRINCS_L>(msg, &sig, &pk));
+let sig = shrincs::sign_stateful::<SHRINCS_B>(msg, &mut sk, &mut state).unwrap();
+assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
 
 // Stateless signature
-let sig = shrincs::sign_stateless::<SHRINCS_L>(msg, &sk).unwrap();
-assert!(shrincs::verify::<SHRINCS_L>(msg, &sig, &pk));
+let sig = shrincs::sign_stateless::<SHRINCS_B>(msg, &sk).unwrap();
+assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
 
 // Restore from a 48-byte seed (deterministic, for KATs)
 let seed = [0x42u8; 48];
-shrincs::restore::<SHRINCS_L>(&seed, &mut pk, &mut sk, &mut state);
+shrincs::restore::<SHRINCS_B>(&seed, &mut pk, &mut sk, &mut state);
 ```
 
 ## SHA-256
@@ -90,9 +93,24 @@ SHA-256 implementation for CKB-VM). The code binds the C `sha256_init` /
 ## Testing
 
 ```bash
-cargo test --release        # unit tests + tests/ + KAT suites (all 3 parameter sets)
-cargo build --no-default-features  # no_std verification surface
+cargo test --release        # unit tests + tests/ (KAT suites excluded by default)
+cargo build --no-default-features  # no_std verification surface (host)
+cargo build --no-default-features --target riscv64imac-unknown-none-elf  # no_std on a bare-metal target
 ```
+
+The KAT suites (`tests/kat.rs`) are **not** run by default: they are gated
+behind the `kat-tests` cargo feature and must be enabled explicitly:
+
+```bash
+cargo test --release --features kat-tests  # KAT pass/fail suites (all 3 parameter sets)
+```
+
+> ⚠️ **Warning: the KAT suites are very slow.** They sign and verify hundreds
+> of messages across all three parameter sets, and every stateful signature
+> grinds over the digest space, so a full run can take a very long time (a
+> `--release` build is strongly recommended; debug builds are far worse).
+> Only enable `kat-tests` when you specifically want the full known-answer
+> validation.
 
 The test suite ports:
 

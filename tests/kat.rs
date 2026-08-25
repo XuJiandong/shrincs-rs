@@ -1,3 +1,5 @@
+#![cfg(feature = "kat-tests")]
+
 //! Port of the C++ KAT generators (`kat/kat_gen_pass.cpp` and
 //! `kat/kat_gen_fail.cpp`) and the truncation demo (`kat/truncation_bug_demo.cpp`).
 //!
@@ -37,7 +39,7 @@ fn sf_siglen<P: Params>(q: u32) -> usize {
 /// counter is equivalent to producing that many dummy signatures. We set it
 /// directly (the C++ `advance_to` loop produces the same resulting signature
 /// but is only there to burn CPU).
-fn advance_to<P: Params>(sk: &mut SecretKey, st: &mut State, target_q: u32) {
+fn advance_to(sk: &mut SecretKey, st: &mut State, target_q: u32) {
     let _ = sk;
     st.q = target_q - 1;
 }
@@ -100,7 +102,7 @@ fn kat_pass_suite<P: Params>(variant: Variant) {
             let mut sk = SecretKey::default();
             let mut st = State::default();
             keygen::<P>(&seed, &mut pk, &mut sk, &mut st);
-            advance_to::<P>(&mut sk, &mut st, target_q);
+            advance_to(&mut sk, &mut st, target_q);
 
             let sig = shrincs_api::sign_stateful::<P>(&msg, &mut sk, &mut st).unwrap();
             let slen = sf_siglen::<P>(target_q);

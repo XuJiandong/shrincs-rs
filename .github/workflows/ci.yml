@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: fmt, clippy, test (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # This crate depends on ckb-opt-sha256, whose build.rs compiles
+      # src/sha256.c with clang (via the clang-finder crate), so the LLVM
+      # toolchain must be installed before any cargo command runs.
+      - name: Install LLVM toolchain (clang)
+        uses: KyleMayes/install-llvm-action@v2.0.9
+        with:
+          version: "19"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: riscv64imac-unknown-none-elf
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2.9.2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Build without the `std` feature for a bare-metal target that has no
+      # std at all, to guarantee the no_std verification surface actually
+      # compiles (a host build with --no-default-features could still link std
+      # through dependencies unnoticed).
+      - name: cargo build --no-default-features (no_std)
+        run: cargo build --no-default-features --target riscv64imac-unknown-none-elf
+
+      - name: cargo test --release
+        run: cargo test --release

@@ -113,7 +113,7 @@ pub trait Params {
     /// Bit offset within the XOF output where the `HSL`-bit hypertree index is
     /// read. Equivalent to the C++ `xof_offset_bits`.
     const XOF_OFFSET_BITS: usize =
-        (((1 << Self::B) * Self::K + Self::T - 1) / Self::T + Self::MARGIN) * Self::B + 16;
+        (((1 << Self::B) * Self::K).div_ceil(Self::T) + Self::MARGIN) * Self::B + 16;
 
     /// Number of 32-byte XOF blocks that must be generated / stored, as
     /// computed by the C++ `xof_block_idx`. Selected indices are always fully

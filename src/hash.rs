@@ -50,10 +50,8 @@ extern "C" {
     fn sha256_final(ctx: *mut Sha256Ctx, hash: *mut c_uchar);
 }
 
-impl Sha256Ctx {
-    /// A freshly initialized SHA-256 context.
-    #[inline]
-    pub fn new() -> Self {
+impl Default for Sha256Ctx {
+    fn default() -> Self {
         let mut ctx = Sha256Ctx {
             data: [0u8; 64],
             datalen: 0,
@@ -64,6 +62,14 @@ impl Sha256Ctx {
             sha256_init(&mut ctx);
         }
         ctx
+    }
+}
+
+impl Sha256Ctx {
+    /// A freshly initialized SHA-256 context.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Copy `self`, append `data`, and return the extended context.
@@ -178,7 +184,7 @@ mod tests {
             let mut out = [0u8; 32];
             let ctx = Sha256Ctx::new().add_to_ctx(msg);
             sha256_finalize_32(&ctx, &mut out);
-            assert_eq!(out, ckb_opt_sha256::sha256(*msg), "mismatch for {msg:02x?}");
+            assert_eq!(out, ckb_opt_sha256::sha256(msg), "mismatch for {msg:02x?}");
         }
     }
 

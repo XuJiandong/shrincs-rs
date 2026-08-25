@@ -52,7 +52,7 @@ pub fn extract_bits(message: &[u8], start_bit_idx: u32, bits_amount: u32) -> u32
 
 /// Whether `elem` occurs anywhere in `arr`.
 pub fn uint32_arr_have(arr: &[u32], elem: u32) -> bool {
-    arr.iter().any(|&a| a == elem)
+    arr.contains(&elem)
 }
 
 /// Derive `K` distinct indices in `[0, T)` from a 32-byte digest via a
@@ -123,8 +123,7 @@ pub fn pors_octopus<P: Params>(indices: &[u32]) -> Option<Vec<(u32, u32)>> {
 
     let mut a_out: Vec<(u32, u32)> = Vec::with_capacity(P::M_MAX);
 
-    for j in 0..P::K {
-        let i = indices[j];
+    for &i in indices {
         if i < 2 * s {
             i_list.push((0, i));
         } else {
@@ -154,7 +153,7 @@ pub fn pors_octopus<P: Params>(indices: &[u32]) -> Option<Vec<(u32, u32)>> {
         }
 
         i_list = p_next;
-        i_list.extend(p_list.drain(..));
+        i_list.append(&mut p_list);
 
         if i_list.len() == 1 && i_list[0].1 == 0 {
             break;
@@ -163,6 +162,10 @@ pub fn pors_octopus<P: Params>(indices: &[u32]) -> Option<Vec<(u32, u32)>> {
 
     Some(a_out)
 }
+
+/// Result of a successful [`pors_grind`]: the randomizer `r`, the 32-byte
+/// digest, and the sorted `K` indices.
+pub type PorsGrindResult = ([u8; 32], [u8; 32], Vec<u32>);
 
 /// Grind for a randomizer `r` whose indices admit an octopus path within
 /// `M_MAX`. Multi-threaded, signing-only (`std`). Port of C++ `pors_grind`.
@@ -175,7 +178,7 @@ pub fn pors_grind<P: Params>(
     adrs: &mut Adrs,
     opt_rand: &[u8],
     hash_ctx: &Sha256Ctx,
-) -> Result<([u8; 32], [u8; 32], Vec<u32>), Error> {
+) -> Result<PorsGrindResult, Error> {
     use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
@@ -206,59 +209,57 @@ pub fn pors_grind<P: Params>(
         let pk_seed = pk_seed.clone();
         let pk_root = pk_root.clone();
         let opt_rand = opt_rand.clone();
-        threads.push(std::thread::spawn(
-            move || -> Option<([u8; 32], [u8; 32], Vec<u32>)> {
-                let mut local_xof_out = vec![0u8; P::XOF_BLOCK_IDX * 32];
-                let mut local_r_out = [0u8; 32];
-                let mut local_digest_out = [0u8; 32];
-                let mut local_adrs: crate::address::Adrs = [0u8; 32];
+        threads.push(std::thread::spawn(move || -> Option<PorsGrindResult> {
+            let mut local_xof_out = vec![0u8; P::XOF_BLOCK_IDX * 32];
+            let mut local_r_out = [0u8; 32];
+            let mut local_digest_out = [0u8; 32];
+            let mut local_adrs: crate::address::Adrs = [0u8; 32];
 
-                loop {
-                    if found.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let ctr = current_ctr.fetch_add(1, Ordering::Relaxed);
-                    if ctr > u32::MAX as u64 {
-                        break;
-                    }
-
-                    prf_msg(
-                        &sk_prf,
-                        &pk_seed,
-                        &opt_rand,
-                        &message,
-                        true,
-                        ctr as u32,
-                        P::R_LEN,
-                        &mut local_r_out,
-                    );
-
-                    let ctx_ = ctx
-                        .add_to_ctx(&local_r_out)
-                        .add_to_ctx(&pk_root)
-                        .add_to_ctx(&message);
-                    sha256_finalize_32(&ctx_, &mut local_digest_out);
-
-                    let a_indices = pors_msg_to_indices::<P>(
-                        &local_digest_out,
-                        &mut local_adrs,
-                        &hash_ctx,
-                        &mut local_xof_out,
-                    );
-
-                    if pors_octopus::<P>(&a_indices).is_some() {
-                        if found
-                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                            .is_ok()
-                        {
-                            return Some((local_r_out, local_digest_out, a_indices));
-                        }
-                        break;
-                    }
+            loop {
+                if found.load(Ordering::Relaxed) {
+                    break;
                 }
-                None
-            },
-        ));
+                let ctr = current_ctr.fetch_add(1, Ordering::Relaxed);
+                if ctr > u32::MAX as u64 {
+                    break;
+                }
+
+                prf_msg(
+                    &sk_prf,
+                    &pk_seed,
+                    &opt_rand,
+                    &message,
+                    true,
+                    ctr as u32,
+                    P::R_LEN,
+                    &mut local_r_out,
+                );
+
+                let ctx_ = ctx
+                    .add_to_ctx(&local_r_out)
+                    .add_to_ctx(&pk_root)
+                    .add_to_ctx(&message);
+                sha256_finalize_32(&ctx_, &mut local_digest_out);
+
+                let a_indices = pors_msg_to_indices::<P>(
+                    &local_digest_out,
+                    &mut local_adrs,
+                    &hash_ctx,
+                    &mut local_xof_out,
+                );
+
+                if pors_octopus::<P>(&a_indices).is_some() {
+                    if found
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        return Some((local_r_out, local_digest_out, a_indices));
+                    }
+                    break;
+                }
+            }
+            None
+        }));
     }
 
     for t in threads {
@@ -381,8 +382,8 @@ pub fn pors_sign<P: Params>(
     sig[..P::R_LEN].copy_from_slice(&r);
     let mut offset = P::R_LEN;
 
-    for i in 0..P::K {
-        let sk_i = pors_sk_gen::<P>(sk_seed, hash_ctx, adrs, indices[i]);
+    for &i in &indices {
+        let sk_i = pors_sk_gen::<P>(sk_seed, hash_ctx, adrs, i);
         sig[offset..offset + P::N].copy_from_slice(&sk_i);
         offset += P::N;
     }
@@ -415,7 +416,7 @@ pub fn pors_pk_from_sig<P: Params>(
     let mut i_list: Vec<Node2> = Vec::with_capacity(P::K);
     let mut p_list: Vec<Node2> = Vec::with_capacity(P::K);
 
-    for k in 0..P::K {
+    for &k in indices {
         let mut sk_i = Node::default();
         sk_i.copy_from_slice(&sig[offset..offset + P::N]);
         offset += P::N;
@@ -423,21 +424,15 @@ pub fn pors_pk_from_sig<P: Params>(
         set_type_and_clear(adrs, PORS_HASH);
         set_key_pair_address(adrs, 0);
         set_tree_height(adrs, 0);
-        set_tree_index(adrs, indices[k]);
+        set_tree_index(adrs, k);
         let ctx = hash_ctx.add_to_ctx(adrs).add_to_ctx(&sk_i);
         let mut val = Node::default();
         sha256_finalize(&ctx, &mut val);
 
-        if indices[k] < 2 * s {
-            i_list.push(Node2 {
-                idx: indices[k],
-                val,
-            });
+        if k < 2 * s {
+            i_list.push(Node2 { idx: k, val });
         } else {
-            p_list.push(Node2 {
-                idx: indices[k] - s,
-                val,
-            });
+            p_list.push(Node2 { idx: k - s, val });
         }
     }
 
@@ -491,7 +486,7 @@ pub fn pors_pk_from_sig<P: Params>(
         }
 
         i_list = p_next;
-        i_list.extend(p_list.drain(..));
+        i_list.append(&mut p_list);
 
         if i_list.len() == 1 && i_list[0].idx == 0 {
             break;
