@@ -91,7 +91,8 @@ SHA-256 implementation for CKB-VM). The code binds the C `sha256_init` /
 
 ```bash
 cargo test --release        # unit tests + tests/ (KAT suites excluded by default)
-cargo build --no-default-features  # no_std verification surface
+cargo build --no-default-features  # no_std verification surface (host)
+cargo build --no-default-features --target riscv64imac-unknown-none-elf  # no_std on a bare-metal target
 ```
 
 The KAT suites (`tests/kat.rs`) are **not** run by default: they are gated
