@@ -14,3 +14,9 @@ kat-tests = []
 ckb-opt-sha256 = "0.1.0"
 getrandom = { version = "0.2", optional = true }
 aes = { version = "0.8", optional = true }
+
+# Native benchmark mirroring deps/shrincs-cpp/tests/bench.cpp.
+# harness = false: plain main() so it runs on stable (no nightly #[bench]).
+[[bench]]
+name = "bench"
+harness = false
