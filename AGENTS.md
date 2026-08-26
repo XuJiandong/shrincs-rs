@@ -2,7 +2,9 @@
 
 Use the following command to finish the task:
 
-```
+```bash
+cargo fmt
+cargo clippy
 cargo test --release -- --skip stateless_sign_verify_all_variants
 ```
 
@@ -14,3 +16,8 @@ Prompt users to install it before run this benchmark.
 
 ## Refactor
 When refactoring, ensure the code matches the C++ implementation in `deps/shrincs-cpp`.
+
+## Crates
+When adding dependencies (Rust crates) to this project, prompt users to confirm before proceeding.
+
+
