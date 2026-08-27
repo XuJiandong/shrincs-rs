@@ -55,6 +55,9 @@ pub mod uxmss;
 pub mod wots_c;
 pub mod xmss;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 #[cfg(feature = "std")]
 pub mod rng;
 

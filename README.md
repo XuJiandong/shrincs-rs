@@ -94,11 +94,92 @@ Notes:
   any key change. A cache from a different key pair yields a wrong result, not
   an error — pass it the matching `sk`.
 
+## WebAssembly
+
+Enable the `wasm-nodejs` feature to expose `wasm-bindgen` functions for JavaScript.
+The wasm API supports all three parameter sets and exports helpers for key
+sizes, state size, signature sizes, key generation, stateful/stateless signing,
+and verification.
+
+```bash
+cargo build --target wasm32-unknown-unknown --features wasm-nodejs
+wasm-bindgen target/wasm32-unknown-unknown/debug/shrincs.wasm --target nodejs --out-dir pkg
+node tests/wasm-node.mjs
+```
+
+The `wasm-bindgen` CLI version must match the `wasm-bindgen` crate version in
+`Cargo.toml`.
+
+```js
+import {
+  ParamsType,
+  initialState,
+  keygen,
+  publicKeyFromKeypair,
+  secretKeyFromKeypair,
+  signStateful,
+  signStateless,
+  signStatelessPrepare,
+  signStatelessWithPrepare,
+  signatureFromStatefulSignResult,
+  stateFromStatefulSignResult,
+  verify,
+  verifyStateful,
+} from './pkg/shrincs.js';
+
+const params = ParamsType.B;
+const message = new TextEncoder().encode('hello world');
+const keypair = keygen(params);
+const publicKey = publicKeyFromKeypair(keypair);
+const secretKey = secretKeyFromKeypair(keypair);
+
+const statelessSignature = signStateless(params, message, secretKey);
+console.log(verify(params, message, statelessSignature, publicKey));
+
+// Build the serializable cache once per key pair, then reuse it for signing.
+const preparedKey = signStatelessPrepare(params, secretKey);
+const preparedSignature = signStatelessWithPrepare(params, message, secretKey, preparedKey);
+console.log(verify(params, message, preparedSignature, publicKey));
+
+let state = initialState();
+const statefulResult = signStateful(params, message, secretKey, state);
+state = stateFromStatefulSignResult(statefulResult);
+const statefulSignature = signatureFromStatefulSignResult(statefulResult);
+console.log(verifyStateful(params, message, statefulSignature, publicKey));
+```
+
+For browsers, enable `wasm-web` to run the PORS+FP and WOTS+C grind operations
+in a Rayon thread pool backed by Web Workers. WebAssembly threads require a
+nightly toolchain, a rebuilt standard library, and atomic memory support:
+
+```bash
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' \
+  cargo +nightly build --release --target wasm32-unknown-unknown \
+  --features wasm-web -Z build-std=std,panic_abort
+wasm-bindgen target/wasm32-unknown-unknown/release/shrincs.wasm \
+  --target web --out-dir pkg
+```
+
+Initialize the worker pool before calling signing functions:
+
+```js
+import init, { initThreadPool, signStateless } from './pkg/shrincs.js';
+
+await init();
+await initThreadPool(navigator.hardwareConcurrency);
+const signature = signStateless(params, message, secretKey);
+```
+
+The page must be cross-origin isolated so that `SharedArrayBuffer` is
+available, typically by serving `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` headers. The generated bindings
+must use the `web` target because workers need access to the WebAssembly module.
+
 ## SHA-256
 
 SHA-256 is provided exclusively by
 [`ckb-opt-sha256`](https://crates.io/crates/ckb-opt-sha256) (the optimized
-SHA-256 implementation for CKB-VM). 
+SHA-256 implementation for CKB-VM).
 
 ## Testing
 

@@ -168,8 +168,8 @@ pub fn pors_octopus<P: Params>(indices: &[u32]) -> Option<Vec<(u32, u32)>> {
 pub type PorsGrindResult = ([u8; 32], [u8; 32], Vec<u32>);
 
 /// Grind for a randomizer `r` whose indices admit an octopus path within
-/// `M_MAX`. Multi-threaded, signing-only (`std`). Port of C++ `pors_grind`.
-#[cfg(feature = "std")]
+/// `M_MAX`. Multi-threaded, signing-only (`std`) on native targets. Port of C++ `pors_grind`.
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub fn pors_grind<P: Params>(
     message: &[u8],
     sk_prf: &[u8],
@@ -269,6 +269,109 @@ pub fn pors_grind<P: Params>(
     }
 
     Err(Error::GrindFailed)
+}
+
+/// Single-threaded PORS+FP grind for WebAssembly.
+///
+/// The browser's default WebAssembly runtime has no `std::thread` support.
+/// Candidate counters are independent, so this preserves the native algorithm
+/// while trading parallel performance for compatibility.
+#[cfg(all(target_arch = "wasm32", feature = "std", feature = "wasm-nodejs"))]
+pub fn pors_grind<P: Params>(
+    message: &[u8],
+    sk_prf: &[u8],
+    pk_seed: &[u8],
+    pk_root: &[u8],
+    adrs: &mut Adrs,
+    opt_rand: &[u8],
+    hash_ctx: &Sha256Ctx,
+) -> Result<PorsGrindResult, Error> {
+    set_type_and_clear(adrs, SL_H_MSG);
+    let ctx = hash_ctx.add_to_ctx(adrs);
+    let mut xof_out = vec![0u8; P::XOF_BLOCK_IDX * 32];
+    let mut randomizer = [0u8; 32];
+    let mut digest = [0u8; 32];
+    let mut candidate_adrs: crate::address::Adrs = [0u8; 32];
+
+    for ctr in 0..=u32::MAX {
+        prf_msg(
+            sk_prf,
+            pk_seed,
+            opt_rand,
+            message,
+            true,
+            ctr,
+            P::R_LEN,
+            &mut randomizer,
+        );
+        let candidate_ctx = ctx
+            .add_to_ctx(&randomizer)
+            .add_to_ctx(pk_root)
+            .add_to_ctx(message);
+        sha256_finalize_32(&candidate_ctx, &mut digest);
+        let indices =
+            pors_msg_to_indices::<P>(&digest, &mut candidate_adrs, hash_ctx, &mut xof_out);
+        if pors_octopus::<P>(&indices).is_some() {
+            return Ok((randomizer, digest, indices));
+        }
+    }
+
+    Err(Error::GrindFailed)
+}
+
+/// Parallel PORS+FP grind for browser WebAssembly using Web Workers.
+#[cfg(all(target_arch = "wasm32", feature = "std", feature = "wasm-web"))]
+pub fn pors_grind<P: Params>(
+    message: &[u8],
+    sk_prf: &[u8],
+    pk_seed: &[u8],
+    pk_root: &[u8],
+    adrs: &mut Adrs,
+    opt_rand: &[u8],
+    hash_ctx: &Sha256Ctx,
+) -> Result<PorsGrindResult, Error> {
+    use rayon::prelude::*;
+
+    set_type_and_clear(adrs, SL_H_MSG);
+    let ctx = hash_ctx.add_to_ctx(adrs);
+
+    (0..=u32::MAX)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    vec![0u8; P::XOF_BLOCK_IDX * 32],
+                    [0u8; 32],
+                    [0u8; 32],
+                    [0u8; 32],
+                )
+            },
+            |(xof_out, randomizer, digest, candidate_adrs), ctr| {
+                prf_msg(
+                    sk_prf,
+                    pk_seed,
+                    opt_rand,
+                    message,
+                    true,
+                    ctr,
+                    P::R_LEN,
+                    randomizer,
+                );
+                let candidate_ctx = ctx
+                    .add_to_ctx(randomizer)
+                    .add_to_ctx(pk_root)
+                    .add_to_ctx(message);
+                sha256_finalize_32(&candidate_ctx, digest);
+                let indices = pors_msg_to_indices::<P>(digest, candidate_adrs, hash_ctx, xof_out);
+
+                pors_octopus::<P>(&indices)
+                    .is_some()
+                    .then(|| (*randomizer, *digest, indices))
+            },
+        )
+        .find_any(|candidate| candidate.is_some())
+        .flatten()
+        .ok_or(Error::GrindFailed)
 }
 
 /// Derive one PORS+FP secret value for `leaf_idx`. `no_std`-safe.
