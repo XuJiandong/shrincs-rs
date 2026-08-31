@@ -1,15 +1,19 @@
 //! Native Rust benchmark for the SHRINCS implementation, mirroring
 //! [`deps/shrincs-cpp/tests/bench.cpp`](../deps/shrincs-cpp/tests/bench.cpp).
 //!
-//! Four cases are measured, in the same order as the C++ bench:
+//! Five cases are measured, the first four in the same order as the C++ bench:
 //!
 //!   1. stateful signing
 //!   2. stateful verification
 //!   3. stateless signing
 //!   4. stateless verification
+//!   5. stateless signing (prepared)
 //!
 //! Key generation is preparation work only: it runs once, before any timer is
-//! started, and is never part of a timed region.
+//! started, and is never part of a timed region. Similarly, the stateless
+//! "prepare" cache (see `sign_stateless_prepare`) is built once per key pair
+//! and is not part of the timed signing regions; only the prepared signing
+//! itself is timed.
 //!
 //! # Usage
 //!
@@ -34,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use shrincs_rs::{
     Params, PublicKey, SHRINCS_B, SHRINCS_B32, SHRINCS_L, SecretKey, State, key_gen, sign_stateful,
-    sign_stateless, verify,
+    sign_stateless, sign_stateless_prepare, sign_stateless_with_prepare, verify,
 };
 
 fn main() {
@@ -129,6 +133,19 @@ fn run<P: Params>(param: &str, iters: usize) {
         assert!(ok, "stateless verification failed");
         black_box(ok);
     });
+
+    // 5. Stateless signing with a precomputed cache. Building the cache is
+    //    preparation work (done once per key pair), so it is timed separately
+    //    and excluded from the signing figure.
+    let prepared = sign_stateless_prepare::<P>(&sk);
+    bench_batch(
+        &format!("Stateless signing (prepared) [{param}]"),
+        iters,
+        || {
+            sig = sign_stateless_with_prepare::<P>(&message, &sk, &prepared).unwrap();
+            black_box(&sig);
+        },
+    );
 
     println!();
     println!(

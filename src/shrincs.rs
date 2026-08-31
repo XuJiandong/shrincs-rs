@@ -219,21 +219,167 @@ pub fn sign_stateful<P: Params>(
     Ok(sig)
 }
 
+/// Precomputed, message-independent data used to accelerate
+/// [`sign_stateless`](sign_stateless) signing for a fixed key pair.
+///
+/// Produced once per key pair by [`sign_stateless_prepare`] and reused across
+/// many signatures. It caches the checkpoint subtree roots of:
+///
+/// * the fixed PORS+FP tree, and
+/// * the single fixed XMSS hypertree layer `D - 1` (the only layer whose tree
+///   address is always `0`, regardless of the message).
+///
+/// The serialized form is `8192 + 512 + 4` = 8,708 bytes, under the 10 KiB
+/// guidance. The struct is plain data: serialize with [`to_bytes`] and restore
+/// with [`from_bytes`]; the caller owns any file I/O.
+///
+/// [`to_bytes`]: Self::to_bytes
+/// [`from_bytes`]: Self::from_bytes
+#[cfg(feature = "std")]
+pub struct PreparedStatelessKey<P: Params> {
+    /// PORS+FP checkpoint subtree roots: `1 << (B - PORS_CHECKPOINT) * N` bytes.
+    pors_roots: Vec<u8>,
+    /// XMSS checkpoint subtree roots for layer `D - 1`:
+    /// `1 << (H_PRIME - XMSS_CHECKPOINT) * N` bytes.
+    xmss_roots: Vec<u8>,
+    _marker: core::marker::PhantomData<fn() -> P>,
+}
+
+#[cfg(feature = "std")]
+impl<P: Params> PreparedStatelessKey<P> {
+    /// Size in bytes of the checkpoint roots for the fixed PORS tree.
+    pub const fn pors_len() -> usize {
+        (1usize << (P::B - P::PORS_CHECKPOINT)) * P::N
+    }
+
+    /// Size in bytes of the checkpoint roots for the fixed XMSS layer `D - 1`.
+    pub const fn xmss_layer_len() -> usize {
+        (1usize << (P::H_PRIME - P::XMSS_CHECKPOINT)) * P::N
+    }
+
+    /// Total serialized length in bytes.
+    pub const fn serialized_len() -> usize {
+        Self::pors_len() + Self::xmss_layer_len() + MAGIC_LEN
+    }
+
+    /// Serialize this prepared key into a flat byte vector.
+    ///
+    /// Layout: `MAGIC_LEN`-byte header (magic) followed by the PORS checkpoint
+    /// roots and then the XMSS layer `D - 1` checkpoint roots, all densely
+    /// packed. The layout is fully determined by `P`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::serialized_len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&self.pors_roots);
+        out.extend_from_slice(&self.xmss_roots);
+        out
+    }
+
+    /// Deserialize a flat byte vector previously produced by [`to_bytes`].
+    /// Returns `None` on any header or length mismatch.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != Self::serialized_len() || !bytes.starts_with(MAGIC) {
+            return None;
+        }
+        let mut off = MAGIC_LEN;
+        let pors_roots = bytes[off..off + Self::pors_len()].to_vec();
+        off += Self::pors_len();
+        let xmss_roots = bytes[off..off + Self::xmss_layer_len()].to_vec();
+        Some(Self {
+            pors_roots,
+            xmss_roots,
+            _marker: core::marker::PhantomData,
+        })
+    }
+}
+
+/// Serialization magic and its byte length for [`PreparedStatelessKey`].
+#[cfg(feature = "std")]
+const MAGIC: &[u8; 4] = b"SPSK";
+#[cfg(feature = "std")]
+const MAGIC_LEN: usize = MAGIC.len();
+
+/// Precompute the message-independent data that accelerates
+/// [`sign_stateless`](sign_stateless) for a given key pair.
+///
+/// Call this once per key pair (its output is reused across every signature),
+/// serialize the result with [`PreparedStatelessKey::to_bytes`], persist it,
+/// then load it (via [`PreparedStatelessKey::from_bytes`]) and pass it to
+/// [`sign_stateless_with_prepare`] for each signature. The computation is
+/// deterministic and depends only on the secret/public seeds embedded in `sk`.
+#[cfg(feature = "std")]
+pub fn sign_stateless_prepare<P: Params>(sk: &SecretKey) -> PreparedStatelessKey<P> {
+    let hash_ctx = base_ctx(&sk.pk.seed);
+
+    // Fixed PORS+FP tree (tree address 0, key pair 0).
+    let pors_roots = pors_fp::pors_checkpoint_roots::<P>(&sk.seed, &hash_ctx);
+
+    // Fixed XMSS hypertree layer D - 1: the only layer whose tree address
+    // (`tree_idx[D - 1]`) is always 0. All shallower layers use the
+    // message-derived `tree_idx[layer]` as their tree address, so their trees
+    // are not fixed and cannot be precomputed.
+    let mut adrs: Adrs = [0u8; 32];
+    set_layer_address(&mut adrs, (P::D - 1) as u32);
+    set_tree_address(&mut adrs, 0, 0);
+    let xmss_roots = xmss::xmss_checkpoint_roots::<P>(&sk.seed, &hash_ctx, &mut adrs);
+
+    PreparedStatelessKey {
+        pors_roots,
+        xmss_roots,
+        _marker: core::marker::PhantomData,
+    }
+}
+
 /// Produce a stateless signature (signing only, multi-threaded grind).
 #[cfg(feature = "std")]
 pub fn sign_stateless<P: Params>(message: &[u8], sk: &SecretKey) -> Result<Vec<u8>, Error> {
+    sign_stateless_core::<P>(message, sk, None)
+}
+
+/// Produce a stateless signature accelerated by a [`PreparedStatelessKey`]
+/// previously built with [`sign_stateless_prepare`] (signing only).
+///
+/// Produces a signature byte-identical to [`sign_stateless`] for the same
+/// message and key, but skips the message-independent tree reconstruction.
+#[cfg(feature = "std")]
+pub fn sign_stateless_with_prepare<P: Params>(
+    message: &[u8],
+    sk: &SecretKey,
+    prepared: &PreparedStatelessKey<P>,
+) -> Result<Vec<u8>, Error> {
+    sign_stateless_core::<P>(message, sk, Some(prepared))
+}
+
+#[cfg(feature = "std")]
+fn sign_stateless_core<P: Params>(
+    message: &[u8],
+    sk: &SecretKey,
+    prepared: Option<&PreparedStatelessKey<P>>,
+) -> Result<Vec<u8>, Error> {
     let mut adrs: Adrs = [0u8; 32];
     let hash_ctx = base_ctx(&sk.pk.seed);
 
-    let (pors_sig, digest) = pors_fp::pors_sign::<P>(
-        message,
-        &sk.seed,
-        &sk.prf,
-        &sk.pk.seed,
-        &sk.pk.root,
-        &hash_ctx,
-        &mut adrs,
-    )?;
+    let (pors_sig, digest) = match prepared {
+        Some(p) => pors_fp::pors_sign_cached::<P>(
+            message,
+            &sk.seed,
+            &sk.prf,
+            &sk.pk.seed,
+            &sk.pk.root,
+            &hash_ctx,
+            &mut adrs,
+            &p.pors_roots,
+        )?,
+        None => pors_fp::pors_sign::<P>(
+            message,
+            &sk.seed,
+            &sk.prf,
+            &sk.pk.seed,
+            &sk.pk.root,
+            &hash_ctx,
+            &mut adrs,
+        )?,
+    };
 
     let mut xof_buf = vec![0u8; P::XOF_BLOCK_IDX * 32];
     let indices = pors_fp::pors_msg_to_indices::<P>(&digest, &mut adrs, &hash_ctx, &mut xof_buf);
@@ -259,17 +405,37 @@ pub fn sign_stateless<P: Params>(message: &[u8], sk: &SecretKey) -> Result<Vec<u
     for layer in 0..P::D {
         set_layer_address(&mut adrs, layer as u32);
         set_tree_address(&mut adrs, 0, tree_idx[layer] as u64);
-        let xmss_sig = xmss::xmss_sign::<P>(
-            &msg,
-            &sk.seed,
-            &sk.prf,
-            &sk.pk.seed,
-            &sk.pk.root,
-            &hash_ctx,
-            &mut adrs,
-            P::H_PRIME as u32,
-            leaf_idx[layer],
-        )?;
+
+        // Only the last layer (D - 1) has a fixed tree (tree address 0) and thus
+        // a cached checkpoint.
+        let layer_cache =
+            prepared.and_then(|p| (layer == P::D - 1).then_some(p.xmss_roots.as_slice()));
+
+        let xmss_sig = match layer_cache {
+            Some(cache) => xmss::xmss_sign_cached::<P>(
+                &msg,
+                &sk.seed,
+                &sk.prf,
+                &sk.pk.seed,
+                &sk.pk.root,
+                &hash_ctx,
+                &mut adrs,
+                P::H_PRIME as u32,
+                leaf_idx[layer],
+                cache,
+            )?,
+            None => xmss::xmss_sign::<P>(
+                &msg,
+                &sk.seed,
+                &sk.prf,
+                &sk.pk.seed,
+                &sk.pk.root,
+                &hash_ctx,
+                &mut adrs,
+                P::H_PRIME as u32,
+                leaf_idx[layer],
+            )?,
+        };
         ht_sig.extend_from_slice(&xmss_sig);
 
         if layer < P::D - 1 {

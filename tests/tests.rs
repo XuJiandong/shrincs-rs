@@ -205,6 +205,56 @@ fn stateless_sign_verify<P: Params>() {
     assert!(shrincs_api::verify::<P>(&message, &sig, &pk));
 }
 
+#[test]
+fn stateless_prepare_sign_verify_all_variants() {
+    stateless_prepare_sign_verify::<SHRINCS_L>();
+    stateless_prepare_sign_verify::<SHRINCS_B>();
+    stateless_prepare_sign_verify::<SHRINCS_B32>();
+}
+
+/// The prepared (cached) stateless signing path must produce a signature
+/// byte-identical to the unprepared one and still verify, and the serialized
+/// cache must stay under the 10 KiB budget.
+fn stateless_prepare_sign_verify<P: Params>() {
+    let mut pk = shrincs_api::PublicKey::default();
+    let mut sk = shrincs_api::SecretKey::default();
+    let mut state = shrincs_api::State::default();
+
+    shrincs_api::key_gen::<P>(&mut pk, &mut sk, &mut state).unwrap();
+
+    let message = vec![0u8; 32];
+
+    let prepared = shrincs_api::sign_stateless_prepare::<P>(&sk);
+    let bytes = prepared.to_bytes();
+    assert!(
+        bytes.len() < 10_000,
+        "cache too large: {} bytes",
+        bytes.len()
+    );
+
+    // Round-trip through the serialized form (as a file backing would).
+    let loaded = shrincs_api::PreparedStatelessKey::<P>::from_bytes(&bytes)
+        .expect("serialized prepared key must round-trip");
+
+    // Corrupted/truncated input must be rejected.
+    let mut bad = bytes.clone();
+    bad[0] ^= 0xFF;
+    assert!(shrincs_api::PreparedStatelessKey::<P>::from_bytes(&bad).is_none());
+    assert!(
+        shrincs_api::PreparedStatelessKey::<P>::from_bytes(&bytes[..bytes.len() - 1]).is_none()
+    );
+
+    let sig = shrincs_api::sign_stateless::<P>(&message, &sk).unwrap();
+    let sig_prepared =
+        shrincs_api::sign_stateless_with_prepare::<P>(&message, &sk, &loaded).unwrap();
+
+    assert_eq!(
+        sig, sig_prepared,
+        "prepared and unprepared signatures must match"
+    );
+    assert!(shrincs_api::verify::<P>(&message, &sig_prepared, &pk));
+}
+
 /// Sanity: the address setters place fields at the documented offsets.
 #[test]
 fn address_setters() {
