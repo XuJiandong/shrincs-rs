@@ -141,6 +141,71 @@ pub fn xmss_sign<P: Params>(
     Ok(sig)
 }
 
+/// Sign an XMSS leaf and simultaneously compute the tree root in a single
+/// bottom-up treehash pass.
+///
+/// [`xmss_sign`] rebuilds the authentication path by independently
+/// constructing the sibling subtree at each level, and [`xmss_root`] rebuilds
+/// the whole tree from scratch. Together they recompute the overlapping leaves
+/// (each `wots_pk_gen`) roughly twice. This function computes the full tree
+/// once, level by level, capturing the root and the `h_prime` authentication
+/// siblings along the way, producing output byte-identical to calling
+/// [`xmss_sign`] and [`xmss_root`] with the same arguments.
+#[cfg(feature = "std")]
+pub fn xmss_sign_with_root<P: Params>(
+    message: &[u8],
+    sk_seed: &[u8],
+    sk_prf: &[u8],
+    pk_seed: &[u8],
+    pk_root: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    h_prime: u32,
+    idx: u32,
+) -> Result<(Vec<u8>, Node), wots_c::Error> {
+    let wots_sig = wots_c::wots_sign::<P>(
+        message, sk_seed, sk_prf, pk_seed, pk_root, hash_ctx, adrs, idx, false, true,
+    )?;
+
+    let h = h_prime as usize;
+    // Level 0: every leaf is a WOTS+C public key.
+    let mut current: Vec<Node> = Vec::with_capacity(1usize << h);
+    for leaf in 0..(1u32 << h) {
+        current.push(wots_c::wots_pk_gen::<P>(
+            sk_seed, hash_ctx, adrs, leaf, false,
+        ));
+    }
+
+    let mut auth = Vec::with_capacity(h * P::N);
+    // Level `i` (0-based) holds nodes of height `i`; `current` starts at level
+    // 0 (the leaves) and is reduced by half each iteration.
+    for level in 0..h {
+        let sibling = ((idx >> level) ^ 1) as usize;
+        auth.extend_from_slice(&current[sibling]);
+
+        for j in 0..(current.len() / 2) {
+            set_type_and_clear(adrs, SL_TREE);
+            set_tree_height(adrs, (level + 1) as u32);
+            set_tree_index(adrs, j as u32);
+            let ctx = hash_ctx
+                .add_to_ctx(adrs)
+                .add_to_ctx(&current[2 * j])
+                .add_to_ctx(&current[2 * j + 1]);
+            let mut res = Node::default();
+            sha256_finalize(&ctx, &mut res);
+            current[j] = res;
+        }
+        current.truncate(current.len() / 2);
+    }
+
+    let root = current[0];
+
+    let mut sig = Vec::with_capacity(P::XMSS_SIGN_LEN);
+    sig.extend_from_slice(&wots_sig);
+    sig.extend_from_slice(&auth);
+    Ok((sig, root))
+}
+
 /// Recursively build the subtree of `target_height` at `start_idx`, consulting
 /// a precomputed subtree-root checkpoint cache (see
 /// [`crate::shrincs::sign_stateless_prepare`]). Signing-only (`std`).

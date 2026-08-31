@@ -406,40 +406,52 @@ fn sign_stateless_core<P: Params>(
         set_layer_address(&mut adrs, layer as u32);
         set_tree_address(&mut adrs, 0, tree_idx[layer] as u64);
 
-        // Only the last layer (D - 1) has a fixed tree (tree address 0) and thus
-        // a cached checkpoint.
-        let layer_cache =
-            prepared.and_then(|p| (layer == P::D - 1).then_some(p.xmss_roots.as_slice()));
-
-        let xmss_sig = match layer_cache {
-            Some(cache) => xmss::xmss_sign_cached::<P>(
-                &msg,
-                &sk.seed,
-                &sk.prf,
-                &sk.pk.seed,
-                &sk.pk.root,
-                &hash_ctx,
-                &mut adrs,
-                P::H_PRIME as u32,
-                leaf_idx[layer],
-                cache,
-            )?,
-            None => xmss::xmss_sign::<P>(
-                &msg,
-                &sk.seed,
-                &sk.prf,
-                &sk.pk.seed,
-                &sk.pk.root,
-                &hash_ctx,
-                &mut adrs,
-                P::H_PRIME as u32,
-                leaf_idx[layer],
-            )?,
-        };
-        ht_sig.extend_from_slice(&xmss_sig);
-
         if layer < P::D - 1 {
-            msg = xmss::xmss_root::<P>(&sk.seed, &hash_ctx, &mut adrs, P::H_PRIME as u32);
+            // Message-dependent layer: compute the XMSS signature and the tree
+            // root in a single bottom-up pass, sharing the leaf (WOTS+C) work
+            // that `xmss_sign` + `xmss_root` would otherwise rebuild twice.
+            let (xmss_sig, root) = xmss::xmss_sign_with_root::<P>(
+                &msg,
+                &sk.seed,
+                &sk.prf,
+                &sk.pk.seed,
+                &sk.pk.root,
+                &hash_ctx,
+                &mut adrs,
+                P::H_PRIME as u32,
+                leaf_idx[layer],
+            )?;
+            ht_sig.extend_from_slice(&xmss_sig);
+            msg = root;
+        } else {
+            // Last layer (D - 1): fixed tree (tree address 0), so its checkpoint
+            // cache applies; the root is the final hypertree root (no chaining).
+            let xmss_sig = match prepared {
+                Some(p) => xmss::xmss_sign_cached::<P>(
+                    &msg,
+                    &sk.seed,
+                    &sk.prf,
+                    &sk.pk.seed,
+                    &sk.pk.root,
+                    &hash_ctx,
+                    &mut adrs,
+                    P::H_PRIME as u32,
+                    leaf_idx[layer],
+                    &p.xmss_roots,
+                )?,
+                None => xmss::xmss_sign::<P>(
+                    &msg,
+                    &sk.seed,
+                    &sk.prf,
+                    &sk.pk.seed,
+                    &sk.pk.root,
+                    &hash_ctx,
+                    &mut adrs,
+                    P::H_PRIME as u32,
+                    leaf_idx[layer],
+                )?,
+            };
+            ht_sig.extend_from_slice(&xmss_sig);
         }
     }
     sig.extend_from_slice(&ht_sig);
