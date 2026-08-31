@@ -20,9 +20,14 @@ jobs:
         with:
           version: "19"
 
+      # Keep `toolchain`, `components` and `targets` in sync with
+      # rust-toolchain.toml: that file overrides rustup's default toolchain,
+      # so CI actually runs on the channel pinned there, and rustup only
+      # auto-installs the components/targets listed in it.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
           targets: riscv64imac-unknown-none-elf
 
