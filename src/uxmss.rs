@@ -8,9 +8,9 @@
 use alloc::vec::Vec;
 
 use crate::address::*;
-use crate::constants::address_types::SF_TREE;
 use crate::constants::Params;
-use crate::hash::{sha256_finalize, Sha256Ctx};
+use crate::constants::address_types::SF_TREE;
+use crate::hash::{Sha256Ctx, sha256_finalize};
 use crate::wots_c::{self, Node};
 
 /// Recursively build the UXMSS subtree at `level` (0 = root). Signing-only.

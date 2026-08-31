@@ -10,7 +10,12 @@
 //! the AES-256-CTR RNG (`kat/rng.c`) so the streams are deterministic and
 //! identical to the C++ generators.
 
-use shrincs::{constants::Params, rng, shrincs as shrincs_api, SHRINCS_B, SHRINCS_B32, SHRINCS_L};
+// The library crate (`shrincs_rs`) and the `shrincs` module share a name; bind
+// the crate root explicitly so `shrincs::…` paths in this file refer to the
+// library root.
+extern crate shrincs_rs as shrincs;
+
+use shrincs::{SHRINCS_B, SHRINCS_B32, SHRINCS_L, constants::Params, rng, shrincs as shrincs_api};
 
 type PublicKey = shrincs_api::PublicKey;
 type SecretKey = shrincs_api::SecretKey;

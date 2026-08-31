@@ -10,11 +10,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::address::*;
-use crate::constants::address_types::*;
 use crate::constants::Params;
+use crate::constants::address_types::*;
 #[cfg(feature = "std")]
 use crate::hash::prf_msg;
-use crate::hash::{sha256_finalize, Sha256Ctx};
+use crate::hash::{Sha256Ctx, sha256_finalize};
 
 /// A 16-byte hash node (the universal digest length `N`).
 pub type Node = [u8; 16];

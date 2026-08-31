@@ -4,8 +4,8 @@
 //! Used to reproduce the KAT byte streams. This is `std`-gated and not part of
 //! the core `no_std` verification surface.
 
-use aes::cipher::{BlockEncrypt, KeyInit};
 use aes::Aes256;
+use aes::cipher::{BlockEncrypt, KeyInit};
 
 /// AES-256 block cipher over a single 16-byte block (ECB).
 type Block = [u8; 16];

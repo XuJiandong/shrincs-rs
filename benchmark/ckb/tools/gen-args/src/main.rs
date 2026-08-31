@@ -18,8 +18,11 @@
 //! passed directly to ckb-debugger:
 //!   gen-shrincs-args --stateful | xargs ckb-debugger --bin build/release/test-shrincs
 
+// The library crate (`shrincs_rs`) and the `shrincs` module share a name; bind
+// the crate root explicitly so `shrincs::…` paths refer to the library root.
+extern crate shrincs_rs as shrincs;
 use shrincs::shrincs as shrincs_api;
-use shrincs::{PublicKey, SecretKey, SHRINCS_B, SHRINCS_B32, SHRINCS_L, State};
+use shrincs::{PublicKey, SecretKey, State, SHRINCS_B, SHRINCS_B32, SHRINCS_L};
 
 /// SHRINCS parameter sets and their generator implementations.
 #[derive(Clone, Copy)]

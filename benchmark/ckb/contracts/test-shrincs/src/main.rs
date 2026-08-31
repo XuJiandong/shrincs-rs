@@ -18,6 +18,9 @@ ckb_std::default_alloc!(16384, 1258306, 64);
 use alloc::vec::Vec;
 
 use ckb_std::log;
+// The library crate (`shrincs_rs`) and the `shrincs` module share a name; bind
+// the crate root explicitly so `shrincs::…` paths refer to the library root.
+extern crate shrincs_rs as shrincs;
 use shrincs::constants::Params;
 use shrincs::shrincs as shrincs_api;
 use shrincs::{PublicKey, SHRINCS_B};

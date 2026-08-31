@@ -8,13 +8,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::address::*;
+use crate::constants::Params;
 #[cfg(feature = "std")]
 use crate::constants::address_types::SL_H_MSG;
 use crate::constants::address_types::{PORS_HASH, PORS_PK, PORS_PRF, PORS_TREE, PORS_XOF};
-use crate::constants::Params;
 #[cfg(feature = "std")]
 use crate::hash::prf_msg;
-use crate::hash::{sha256_finalize, sha256_finalize_32, Sha256Ctx};
+use crate::hash::{Sha256Ctx, sha256_finalize, sha256_finalize_32};
 use crate::wots_c::Node;
 
 /// Error raised by PORS+FP operations.
