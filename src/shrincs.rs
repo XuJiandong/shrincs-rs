@@ -9,9 +9,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::address::*;
-use crate::constants::address_types::{ROOT, SL_H_MSG};
 use crate::constants::Params;
-use crate::hash::{sha256_finalize, sha256_finalize_32, Sha256Ctx};
+use crate::constants::address_types::{ROOT, SL_H_MSG};
+use crate::hash::{Sha256Ctx, sha256_finalize, sha256_finalize_32};
 use crate::{pors_fp, uxmss, wots_c, xmss};
 
 /// Errors produced by SHRINCS operations.

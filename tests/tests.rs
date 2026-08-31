@@ -3,15 +3,17 @@
 //! Exercises each building block (WOTS, XMSS, UXMSS, PORS) and the top-level
 //! stateful/stateless sign-verify round trips, for all three parameter sets.
 
-// The library crate and the `shrincs` module share a name; bind the crate
-// explicitly so `shrincs::…` paths in this file refer to the library root.
-extern crate shrincs;
+// The library crate (`shrincs_rs`) and the `shrincs` module share a name; bind
+// the crate root explicitly so `shrincs::…` paths in this file refer to the
+// library root.
+extern crate shrincs_rs as shrincs;
 
 use shrincs::{
+    SHRINCS_B, SHRINCS_B32, SHRINCS_L,
     address::{self, Adrs},
     constants::Params,
     hash::Sha256Ctx,
-    pors_fp, shrincs as shrincs_api, uxmss, wots_c, xmss, SHRINCS_B, SHRINCS_B32, SHRINCS_L,
+    pors_fp, shrincs as shrincs_api, uxmss, wots_c, xmss,
 };
 
 /// Build the shared base hash context from an all-zero `pk_seed` plus 48 zero

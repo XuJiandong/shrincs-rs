@@ -44,7 +44,7 @@ pub struct Sha256Ctx {
 
 // The exact `extern "C"` symbols shipped by `ckb-opt-sha256` (from its
 // `src/sha256.c`, linked via its `build.rs`).
-extern "C" {
+unsafe extern "C" {
     fn sha256_init(ctx: *mut Sha256Ctx);
     fn sha256_update(ctx: *mut Sha256Ctx, data: *const c_uchar, len: c_ulonglong);
     fn sha256_final(ctx: *mut Sha256Ctx, hash: *mut c_uchar);

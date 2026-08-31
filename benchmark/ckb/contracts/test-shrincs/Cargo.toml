@@ -7,7 +7,7 @@ edition = "2024"
 ckb-std = { version = "1.1", features = ["log"] }
 # shrincs-rs with no_std support. The `verify` path is no_std-safe; signing
 # (std) lives in the host-side argument generator, not here.
-shrincs = { path = "../../../..", default-features = false }
+shrincs-rs = { path = "../../../..", default-features = false }
 
 [features]
 library = []

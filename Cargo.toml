@@ -1,7 +1,7 @@
 [package]
-name = "shrincs"
-version = "0.1.0"
-edition = "2021"
+name = "shrincs-rs"
+version = "1.0.0"
+edition = "2024"
 description = "Rust implementation of the SHRINCS post-quantum signature scheme"
 license = "MIT"
 

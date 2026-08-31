@@ -6,4 +6,4 @@ edition = "2021"
 # Host-side test-vector generator. It needs `std` because signing requires
 # getrandom/threading and only runs on the native build host.
 [dependencies]
-shrincs = { path = "../../../.." }
+shrincs-rs = { path = "../../../.." }

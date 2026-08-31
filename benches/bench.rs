@@ -32,9 +32,9 @@ use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use shrincs::{
-    key_gen, sign_stateful, sign_stateless, verify, Params, PublicKey, SecretKey, State, SHRINCS_B,
-    SHRINCS_B32, SHRINCS_L,
+use shrincs_rs::{
+    Params, PublicKey, SHRINCS_B, SHRINCS_B32, SHRINCS_L, SecretKey, State, key_gen, sign_stateful,
+    sign_stateless, verify,
 };
 
 fn main() {

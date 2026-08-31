@@ -23,8 +23,13 @@
 //! Run `make kat` first to (re)generate the files, then:
 //!   cargo test --release --features kat-tests --test cpp-kat
 
+// The library crate (`shrincs_rs`) and the `shrincs` module share a name; bind
+// the crate root explicitly so `shrincs::…` paths in this file refer to the
+// library root.
+extern crate shrincs_rs as shrincs;
+
 use shrincs::constants::Params;
-use shrincs::{restore, verify, PublicKey, SecretKey, State, SHRINCS_B, SHRINCS_L};
+use shrincs::{PublicKey, SHRINCS_B, SHRINCS_L, SecretKey, State, restore, verify};
 
 const B_PASS: &str = include_str!("SHRINCS-B_pass.rsp");
 const B_FAIL: &str = include_str!("SHRINCS-B_fail.rsp");
