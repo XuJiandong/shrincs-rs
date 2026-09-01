@@ -14,6 +14,25 @@
 #[cfg(target_endian = "big")]
 compile_error!("SHRINCS only supports little-endian platforms");
 
+/// Compute a subtree "checkpoint" height for the precomputation cache used by
+/// [`crate::shrincs::sign_stateless_prepare`].
+///
+/// Caching the roots of all height-`ck` subtrees of a `total_height`-tall tree
+/// requires `1 << (total_height - ck)` nodes of `N = 16` bytes each. This
+/// returns the smallest `ck` (at least 1) whose node count does not exceed
+/// `budget_roots`, i.e. the shallowest checkpoint that still fits the budget —
+/// the shallow the checkpoint, the more signing work it eliminates.
+///
+/// `budget_roots` is expressed in node counts (not bytes) so callers can size
+/// their serialization budget in bytes as `budget_roots * N`.
+const fn checkpoint_height(total_height: usize, budget_roots: usize) -> usize {
+    let mut ck = 1usize;
+    while ck <= total_height && ((1usize << (total_height - ck)) > budget_roots) {
+        ck += 1;
+    }
+    ck
+}
+
 /// Common trait implemented by every SHRINCS parameter set.
 ///
 /// All length / count parameters are expressed as byte counts or element
@@ -119,6 +138,16 @@ pub trait Params {
     /// computed by the C++ `xof_block_idx`. Selected indices are always fully
     /// contained within the first `XOF_BLOCK_IDX` blocks.
     const XOF_BLOCK_IDX: usize = (Self::XOF_OFFSET_BITS + 32 + 255) >> 8;
+
+    /// Checkpoint height for the PORS+FP tree cache used by
+    /// [`crate::shrincs::sign_stateless_prepare`]. Caches `1 << (B - CK)`
+    /// subtree roots of `N` bytes each, kept within an 8 KiB budget.
+    const PORS_CHECKPOINT: usize = checkpoint_height(Self::B, 8192 / Self::N);
+
+    /// Checkpoint height for the (fixed, message-independent) XMSS hypertree
+    /// layers `1..D`. Caches `1 << (H_PRIME - CK)` subtree roots of `N` bytes
+    /// each per layer, kept within a 512-byte per-layer budget.
+    const XMSS_CHECKPOINT: usize = checkpoint_height(Self::H_PRIME, 512 / Self::N);
 }
 
 /// The SHRINCS-L parameter set (faster, larger signatures).

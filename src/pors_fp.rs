@@ -361,6 +361,102 @@ pub fn pors_auth_path<P: Params>(
     (auth, a_len)
 }
 
+/// Build the PORS+FP subtree of `target_height` at `idx` consulting a
+/// precomputed subtree-root checkpoint cache (see
+/// [`crate::shrincs::sign_stateless_prepare`]). Signing-only.
+///
+/// `cache` holds `1 << (B - PORS_CHECKPOINT)` subtree roots (each `N` bytes)
+/// for the fixed PORS tree. Subtrees at height `PORS_CHECKPOINT` and above are
+/// reconstructed from the cache; shallower subtrees fall back to the
+/// (uncached) [`pors_treehash`]. Produces byte-identical output to
+/// [`pors_treehash`] for the same inputs.
+#[cfg(feature = "std")]
+pub fn pors_treehash_cached<P: Params>(
+    sk_seed: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    target_height: u32,
+    idx: u32,
+    cache: &[u8],
+) -> Node {
+    let ck = P::PORS_CHECKPOINT as u32;
+
+    if target_height < ck {
+        return pors_treehash::<P>(sk_seed, hash_ctx, adrs, target_height, idx);
+    }
+
+    if target_height == ck {
+        let offset = (idx as usize) * P::N;
+        debug_assert!(offset + P::N <= cache.len());
+        let mut res = Node::default();
+        res.copy_from_slice(&cache[offset..offset + P::N]);
+        return res;
+    }
+
+    // target_height > ck: combine two (target_height - 1) subtrees.
+    let left =
+        pors_treehash_cached::<P>(sk_seed, hash_ctx, adrs, target_height - 1, 2 * idx, cache);
+    let right = pors_treehash_cached::<P>(
+        sk_seed,
+        hash_ctx,
+        adrs,
+        target_height - 1,
+        2 * idx + 1,
+        cache,
+    );
+
+    set_type_and_clear(adrs, PORS_TREE);
+    set_key_pair_address(adrs, 0);
+    set_tree_height(adrs, target_height);
+    set_tree_index(adrs, idx);
+    let ctx = hash_ctx
+        .add_to_ctx(adrs)
+        .add_to_ctx(&left)
+        .add_to_ctx(&right);
+    let mut res = Node::default();
+    sha256_finalize(&ctx, &mut res);
+    res
+}
+
+/// Produce the PORS+FP authentication path for `indices`, consulting the
+/// precomputed checkpoint cache. `no_std`-safe. Returns `(auth_bytes, a_len)`.
+#[cfg(feature = "std")]
+pub fn pors_auth_path_cached<P: Params>(
+    sk_seed: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    indices: &[u32],
+    cache: &[u8],
+) -> (Vec<u8>, usize) {
+    let a = pors_octopus::<P>(indices).expect("indices must admit an octopus path");
+    let a_len = a.len();
+    let mut auth = Vec::with_capacity(a_len * P::N);
+    for (lvl, idx) in a {
+        let tmp = pors_treehash_cached::<P>(sk_seed, hash_ctx, adrs, lvl, idx, cache);
+        auth.extend_from_slice(&tmp);
+    }
+    (auth, a_len)
+}
+
+/// Precompute the PORS+FP subtree roots at [`Params::PORS_CHECKPOINT`].
+///
+/// Returns `1 << (B - PORS_CHECKPOINT) * N` bytes: the cached roots of every
+/// height-`PORS_CHECKPOINT` subtree of the fixed PORS tree, in index order.
+/// Signing-only. This is the PORS half of
+/// [`crate::shrincs::sign_stateless_prepare`] and is independent of the message.
+#[cfg(feature = "std")]
+pub fn pors_checkpoint_roots<P: Params>(sk_seed: &[u8], hash_ctx: &Sha256Ctx) -> Vec<u8> {
+    let ck = P::PORS_CHECKPOINT as u32;
+    let count = 1usize << (P::B - P::PORS_CHECKPOINT);
+    let mut roots = Vec::with_capacity(count * P::N);
+    let mut adrs: Adrs = [0u8; 32];
+    for idx in 0..count as u32 {
+        let node = pors_treehash::<P>(sk_seed, hash_ctx, &mut adrs, ck, idx);
+        roots.extend_from_slice(&node);
+    }
+    roots
+}
+
 /// Sign the message with PORS+FP. Returns a `PORS_SIGN_LEN`-byte signature
 /// (zero-padded after the used auth path) and the 32-byte digest. Signing-only.
 #[cfg(feature = "std")]
@@ -372,6 +468,47 @@ pub fn pors_sign<P: Params>(
     pk_root: &[u8],
     hash_ctx: &Sha256Ctx,
     adrs: &mut Adrs,
+) -> Result<(Vec<u8>, [u8; 32]), Error> {
+    pors_sign_inner::<P>(
+        message, sk_seed, sk_prf, pk_seed, pk_root, hash_ctx, adrs, None,
+    )
+}
+
+/// [`pors_sign`] that consults a precomputed checkpoint `cache`
+/// (see [`crate::shrincs::sign_stateless_prepare`]). Signing-only.
+#[cfg(feature = "std")]
+pub fn pors_sign_cached<P: Params>(
+    message: &[u8],
+    sk_seed: &[u8],
+    sk_prf: &[u8],
+    pk_seed: &[u8],
+    pk_root: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    cache: &[u8],
+) -> Result<(Vec<u8>, [u8; 32]), Error> {
+    pors_sign_inner::<P>(
+        message,
+        sk_seed,
+        sk_prf,
+        pk_seed,
+        pk_root,
+        hash_ctx,
+        adrs,
+        Some(cache),
+    )
+}
+
+#[cfg(feature = "std")]
+fn pors_sign_inner<P: Params>(
+    message: &[u8],
+    sk_seed: &[u8],
+    sk_prf: &[u8],
+    pk_seed: &[u8],
+    pk_root: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    cache: Option<&[u8]>,
 ) -> Result<(Vec<u8>, [u8; 32]), Error> {
     let mut sig = vec![0u8; P::PORS_SIGN_LEN];
 
@@ -388,7 +525,10 @@ pub fn pors_sign<P: Params>(
         offset += P::N;
     }
 
-    let (auth, a_len) = pors_auth_path::<P>(sk_seed, hash_ctx, adrs, &indices);
+    let (auth, a_len) = match cache {
+        Some(cache) => pors_auth_path_cached::<P>(sk_seed, hash_ctx, adrs, &indices, cache),
+        None => pors_auth_path::<P>(sk_seed, hash_ctx, adrs, &indices),
+    };
     sig[offset..offset + a_len * P::N].copy_from_slice(&auth);
 
     Ok((sig, digest))

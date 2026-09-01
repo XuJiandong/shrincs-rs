@@ -8,22 +8,6 @@ post-quantum signature scheme, ported from the
 > learning, and experimentation.** It is not production-ready and has not
 > undergone a formal security audit.
 
-## Design
-
-The crate mirrors the C++ module layout, with one Rust module per C++ file:
-
-| C++ file            | Rust module       |
-|---------------------|-------------------|
-| `constants.h`       | `shrincs::constants` |
-| `address.h/.cpp`    | `shrincs::address`   |
-| `hash.h/.cpp`       | `shrincs::hash`      |
-| `wots_c.h/.cpp`     | `shrincs::wots_c`    |
-| `xmss.h/.cpp`       | `shrincs::xmss`      |
-| `uxmss.h/.cpp`      | `shrincs::uxmss`     |
-| `pors_fp.h/.cpp`    | `shrincs::pors_fp`   |
-| `shrincs.h/.cpp`    | `shrincs::shrincs`   |
-| `rng.c/.h` (kat)    | `shrincs::rng`       |
-
 ### Parameter sets
 
 Three parameter sets coexist as distinct marker types implementing
@@ -36,10 +20,6 @@ Three parameter sets coexist as distinct marker types implementing
 [`SHRINCS_B`](shrincs::SHRINCS_B) is the recommended default: it has the
 smallest signature size of the three parameter sets.
 
-Every parameter (`W`, `L`, `SWN`, `HSF`, `HSL`, `D`, `T`, `B`, `K`, `M_MAX`,
-`H_PRIME`, and the derived signature sizes) is documented in
-`src/constants.rs`.
-
 ### `no_std` verification / `std` signing
 
 The crate is `#![no_std]` with an optional `std` feature (on by default):
@@ -49,10 +29,6 @@ The crate is `#![no_std]` with an optional `std` feature (on by default):
 * **Signing** (`key_gen`, `sign_stateful`, `sign_stateless`, key derivation
   `restore`) requires `std` for OS randomness and multi-threaded digest
   grinding.
-
-```toml
-shrincs = { path = ".", default-features = false } # verification only
-```
 
 ## Usage
 
@@ -76,25 +52,58 @@ assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
 let sig = shrincs::sign_stateless::<SHRINCS_B>(msg, &sk).unwrap();
 assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
 
-// Restore from a 48-byte seed (deterministic, for KATs)
+// Restore from a 48-byte seed
 let seed = [0x42u8; 48];
 shrincs::restore::<SHRINCS_B>(&seed, &mut pk, &mut sk, &mut state);
 ```
+
+## Fast stateless signing (`prepare`)
+
+A plain [`sign_stateless`](shrincs::sign_stateless) call is quite slow. If you
+sign many messages with the same key pair, precompute that work once and reuse
+it to speed things up:
+
+```rust
+use shrincs::{Params, SHRINCS_B};
+
+let mut pk = shrincs::PublicKey::default();
+let mut sk = shrincs::SecretKey::default();
+let mut state = shrincs::State::default();
+shrincs::key_gen::<SHRINCS_B>(&mut pk, &mut sk, &mut state).unwrap();
+
+// Build once per key pair (deterministic; depends only on the seeds in `sk`).
+let prepared = shrincs::sign_stateless_prepare::<SHRINCS_B>(&sk);
+
+// Optionally serialize/persist it, then load it back later.
+let bytes = prepared.to_bytes(); // 8,708 bytes for all parameter sets
+let loaded = shrincs::PreparedStatelessKey::<SHRINCS_B>::from_bytes(&bytes).unwrap();
+
+// Reuse the prepared cache across any number of messages.
+let msg = b"hello world";
+let sig = shrincs::sign_stateless_with_prepare::<SHRINCS_B>(msg, &sk, &loaded).unwrap();
+assert!(shrincs::verify::<SHRINCS_B>(msg, &sig, &pk));
+```
+
+Notes:
+
+* [`sign_stateless_with_prepare`](shrincs::sign_stateless_with_prepare)
+  produces a signature **byte-identical** to [`sign_stateless`](shrincs::sign_stateless)
+  for the same message and key — it only skips the message-independent tree
+  reconstruction.
+* The cache is message-independent and tied to the key pair: rebuild it after
+  any key change. A cache from a different key pair yields a wrong result, not
+  an error — pass it the matching `sk`.
 
 ## SHA-256
 
 SHA-256 is provided exclusively by
 [`ckb-opt-sha256`](https://crates.io/crates/ckb-opt-sha256) (the optimized
-SHA-256 implementation for CKB-VM). The code binds the C `sha256_init` /
-`sha256_update` / `sha256_final` symbols shipped by that crate through a
-`#[repr(C)]` `Copy` context, reproducing the reference implementation's
-"copy a pre-keyed base context, append, finalize" idiom byte-for-byte.
+SHA-256 implementation for CKB-VM). 
 
 ## Testing
 
 ```bash
 cargo test --release        # unit tests + tests/ (KAT suites excluded by default)
-cargo build --no-default-features  # no_std verification surface (host)
 cargo build --no-default-features --target riscv64imac-unknown-none-elf  # no_std on a bare-metal target
 ```
 
@@ -106,19 +115,10 @@ cargo test --release --features kat-tests  # KAT pass/fail suites (all 3 paramet
 ```
 
 > ⚠️ **Warning: the KAT suites are very slow.** They sign and verify hundreds
-> of messages across all three parameter sets, and every stateful signature
-> grinds over the digest space, so a full run can take a very long time (a
+> of messages across all three parameter sets, so a full run can take a very long time (a
 > `--release` build is strongly recommended; debug builds are far worse).
 > Only enable `kat-tests` when you specifically want the full known-answer
 > validation.
-
-The test suite ports:
-
-* `tests/tests.cpp` → `tests/tests.rs` (WOTS/XMSS/UXMSS round-trips,
-  `extract_bits`, stateful & stateless sign/verify).
-* `kat/kat_gen_pass.cpp`, `kat/kat_gen_fail.cpp`, `kat/truncation_bug_demo.cpp`,
-  and `kat/rng.c` → `tests/kat.rs` + `src/rng.rs` (deterministic AES-256-CTR
-  known-answer pass/fail suites).
 
 ## License
 
