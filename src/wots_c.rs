@@ -119,10 +119,10 @@ pub fn wots_pk_gen<P: Params>(
     res
 }
 
-/// Grind for a valid WOTS+C message digest (multi-threaded, `std` only).
+/// Grind for a valid WOTS+C message digest (multi-threaded on native targets).
 ///
 /// Returns `(ctr, digits)` where `digits` has `L` bytes. Port of `wots_grind`.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub fn wots_grind<P: Params>(
     message: &[u8],
     hash_ctx: &Sha256Ctx,
@@ -195,6 +195,72 @@ pub fn wots_grind<P: Params>(
     }
 
     Err(Error::GrindFailed)
+}
+
+/// Single-threaded WOTS+C digest grind for WebAssembly.
+///
+/// Browser WASM does not support `std::thread::spawn`. The counter search is
+/// deterministic, so checking candidates in ascending order preserves the
+/// same valid-result and exhaustion semantics as the native implementation.
+#[cfg(all(target_arch = "wasm32", feature = "std", feature = "wasm-nodejs"))]
+pub fn wots_grind<P: Params>(
+    message: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    keypair: u32,
+    sf: bool,
+) -> Result<(u32, Vec<u8>), Error> {
+    let grind_type = if sf { SF_WOTS_GRIND } else { SL_WOTS_GRIND };
+    set_type_and_clear(adrs, grind_type);
+    set_key_pair_address(adrs, keypair);
+    let ctx = hash_ctx.add_to_ctx(adrs).add_to_ctx(message);
+    let mut digest = Node::default();
+    let mut digits = vec![0u8; P::L];
+
+    for ctr in 0..=u32::MAX {
+        let candidate_ctx = ctx.add_to_ctx(&ctr.to_be_bytes());
+        sha256_finalize(&candidate_ctx, &mut digest);
+        base_w::<P>(&digest, &mut digits);
+        if digits.iter().map(|&digit| digit as u32).sum::<u32>() == P::SWN as u32 {
+            return Ok((ctr, digits));
+        }
+    }
+
+    Err(Error::GrindFailed)
+}
+
+/// Parallel WOTS+C digest grind for browser WebAssembly using Web Workers.
+#[cfg(all(target_arch = "wasm32", feature = "std", feature = "wasm-web"))]
+pub fn wots_grind<P: Params>(
+    message: &[u8],
+    hash_ctx: &Sha256Ctx,
+    adrs: &mut Adrs,
+    keypair: u32,
+    sf: bool,
+) -> Result<(u32, Vec<u8>), Error> {
+    use rayon::prelude::*;
+
+    let grind_type = if sf { SF_WOTS_GRIND } else { SL_WOTS_GRIND };
+    set_type_and_clear(adrs, grind_type);
+    set_key_pair_address(adrs, keypair);
+    let ctx = hash_ctx.add_to_ctx(adrs).add_to_ctx(message);
+
+    (0..=u32::MAX)
+        .into_par_iter()
+        .map_init(
+            || (Node::default(), vec![0u8; P::L]),
+            |(digest, digits), ctr| {
+                let candidate_ctx = ctx.add_to_ctx(&ctr.to_be_bytes());
+                sha256_finalize(&candidate_ctx, digest);
+                base_w::<P>(digest, digits);
+
+                (digits.iter().map(|&digit| digit as u32).sum::<u32>() == P::SWN as u32)
+                    .then(|| (ctr, digits.clone()))
+            },
+        )
+        .find_any(|candidate| candidate.is_some())
+        .flatten()
+        .ok_or(Error::GrindFailed)
 }
 
 /// Recompute and validate the WOTS+C digest for a single counter (`no_std`).
