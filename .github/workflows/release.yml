@@ -26,8 +26,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
-          components: rustfmt, clippy
-          targets: riscv64imac-unknown-none-elf
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - run: |

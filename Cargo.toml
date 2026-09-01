@@ -5,6 +5,7 @@ edition = "2024"
 repository = "https://github.com/XuJiandong/shrincs-rs"
 description = "Rust implementation of the SHRINCS post-quantum signature scheme"
 license = "MIT"
+readme = "README.md"
 
 [features]
 default = ["std"]
