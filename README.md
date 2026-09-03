@@ -177,9 +177,8 @@ must use the `web` target because workers need access to the WebAssembly module.
 
 ## SHA-256
 
-SHA-256 is provided exclusively by
-[`ckb-opt-sha256`](https://crates.io/crates/ckb-opt-sha256) (the optimized
-SHA-256 implementation for CKB-VM).
+SHA-256 is provided by [`ckb-opt-sha256`](https://crates.io/crates/ckb-opt-sha256) (the optimized
+SHA-256 implementation in C). It requires C compiler(clang).
 
 ## Testing
 
