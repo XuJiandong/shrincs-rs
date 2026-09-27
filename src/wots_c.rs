@@ -5,6 +5,44 @@
 //! each XMSS layer). All functions are generic over [`Params`], reading
 //! parameters as runtime values (the universal sizes `N = 16` and `R_LEN = 32`
 //! are fixed array types; variant-specific lengths use `Vec`).
+//!
+//! # Standalone usage
+//!
+//! The low-level primitives ([`wots_pk_gen`], [`wots_sign`],
+//! [`wots_pk_from_sig`]) take the hash context, the address, the key-pair index
+//! and the stateful/stateless domain as explicit arguments, because the trees
+//! above them drive those values. For callers that just want to sign and verify
+//! a message with WOTS+C, this module also exposes a self-contained API:
+//!
+//! ```
+//! use shrincs_rs as shrincs;
+//! use shrincs::{SHRINCS_B, wots_c};
+//!
+//! // Deterministic key generation from a 48-byte seed
+//! // (`sk_seed ‖ sk_prf ‖ pk_seed`).
+//! let sk = wots_c::wots_key_from_seed::<SHRINCS_B>(&[0x42u8; 48]);
+//!
+//! let sig = wots_c::wots_sign_message::<SHRINCS_B>(b"hello world", &sk).unwrap();
+//! assert!(wots_c::wots_verify_message::<SHRINCS_B>(
+//!     b"hello world",
+//!     &sig,
+//!     &sk.pk,
+//! ));
+//! assert!(!wots_c::wots_verify_message::<SHRINCS_B>(
+//!     b"hello WORLD",
+//!     &sig,
+//!     &sk.pk,
+//! ));
+//! ```
+//!
+//! Standalone instances pin the WOTS+C context to the **stateless** domain
+//! (`sf = false`), key-pair address `0` and an all-zero address, and bind the
+//! public root into the message hash (`is_internal = false`).
+//!
+//! > ⚠️ WOTS+C is a **one-time** signature scheme: signing two different
+//! > messages under the same key pair reveals the secret key. Use
+//! > [`wots_key_gen`]/[`wots_key_from_seed`] to produce one key pair per
+//! > message to be signed.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -26,6 +64,8 @@ pub enum Error {
     DigestInvalid,
     /// The (theoretically unreachable) grind search failed to find a valid digest.
     GrindFailed,
+    /// The OS random source failed during key generation (signing only).
+    Random,
 }
 
 /// Decompose `message` into `L` base-`W` digits, packed MSB-first.
@@ -447,4 +487,270 @@ pub fn wots_pk_from_sig<P: Params>(
     let mut res = Node::default();
     sha256_finalize(&ctx, &mut res);
     Ok(res)
+}
+
+// ---------------------------------------------------------------------------
+// Standalone (self-contained) WOTS+C API.
+//
+// The primitives above are driven by the UXMSS/XMSS trees, which supply the
+// hash context, address, key-pair index and domain. The items below wrap them
+// into a plain one-time signature interface: generate a key pair, sign a
+// message, verify a message. Every standalone instance uses the stateless
+// (`sf = false`) domain with key-pair address 0 and an all-zero address, and
+// binds the public root into the message hash (`is_internal = false`), so
+// signatures and public keys are fully self-describing.
+// ---------------------------------------------------------------------------
+
+/// Key-pair index used by every standalone WOTS+C instance.
+const STANDALONE_KEYPAIR: u32 = 0;
+
+/// Domain flag used by every standalone WOTS+C instance (stateless).
+const STANDALONE_SF: bool = false;
+
+/// A standalone WOTS+C public key.
+///
+/// Contains the public seed used to derive the (message-independent) hash
+/// context and the [`Node`]-sized compressed WOTS+C public root. Serializes to
+/// `pk_seed ‖ root` (32 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WotsPublicKey {
+    /// The 16-byte public seed.
+    pub pk_seed: [u8; 16],
+    /// The 16-byte compressed public root.
+    pub root: Node,
+}
+
+impl WotsPublicKey {
+    /// Serialized length in bytes: `N + N`.
+    pub const SERIALIZED_LEN: usize = 32;
+
+    /// Serialize to `pk_seed ‖ root`.
+    pub fn to_bytes(&self) -> [u8; Self::SERIALIZED_LEN] {
+        let mut out = [0u8; Self::SERIALIZED_LEN];
+        out[..16].copy_from_slice(&self.pk_seed);
+        out[16..].copy_from_slice(&self.root);
+        out
+    }
+
+    /// Deserialize from `pk_seed ‖ root`. Returns `None` if the length is wrong.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != Self::SERIALIZED_LEN {
+            return None;
+        }
+        let mut pk_seed = [0u8; 16];
+        let mut root = Node::default();
+        pk_seed.copy_from_slice(&bytes[..16]);
+        root.copy_from_slice(&bytes[16..]);
+        Some(Self { pk_seed, root })
+    }
+}
+
+/// A standalone WOTS+C secret key.
+///
+/// Holds the two secret seeds and the matching [`WotsPublicKey`] (mirroring
+/// [`crate::shrincs::SecretKey`]). Serializes to `sk_seed ‖ sk_prf ‖ pk_seed ‖
+/// root` (64 bytes).
+///
+/// > ⚠️ WOTS+C is a **one-time** signature scheme: never sign two different
+/// > messages with the same key pair.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct WotsSecretKey {
+    /// The 16-byte secret seed (WOTS+C chain secrets are derived from it).
+    pub sk_seed: [u8; 16],
+    /// The 16-byte secret PRF key (randomizes the signature).
+    pub sk_prf: [u8; 16],
+    /// The matching public key.
+    pub pk: WotsPublicKey,
+}
+
+impl WotsSecretKey {
+    /// Serialized length in bytes: `sk_seed ‖ sk_prf ‖ pk_seed ‖ root`.
+    pub const SERIALIZED_LEN: usize = 64;
+
+    /// The matching public key.
+    pub fn public_key(&self) -> &WotsPublicKey {
+        &self.pk
+    }
+
+    /// Serialize to `sk_seed ‖ sk_prf ‖ pk_seed ‖ root`.
+    pub fn to_bytes(&self) -> [u8; Self::SERIALIZED_LEN] {
+        let mut out = [0u8; Self::SERIALIZED_LEN];
+        out[..16].copy_from_slice(&self.sk_seed);
+        out[16..32].copy_from_slice(&self.sk_prf);
+        out[32..].copy_from_slice(&self.pk.to_bytes());
+        out
+    }
+
+    /// Deserialize from `sk_seed ‖ sk_prf ‖ pk_seed ‖ root`. Returns `None` if
+    /// the length is wrong.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != Self::SERIALIZED_LEN {
+            return None;
+        }
+        let mut sk_seed = [0u8; 16];
+        let mut sk_prf = [0u8; 16];
+        sk_seed.copy_from_slice(&bytes[..16]);
+        sk_prf.copy_from_slice(&bytes[16..32]);
+        let pk = WotsPublicKey::from_bytes(&bytes[32..])?;
+        Some(Self {
+            sk_seed,
+            sk_prf,
+            pk,
+        })
+    }
+}
+
+/// A standalone WOTS+C signature: `r ‖ ctr ‖ chains`, [`Params::WOTS_SIGN_LEN`]
+/// bytes in total.
+///
+/// The struct is opaque so a signature can only be obtained from
+/// [`wots_sign_message`] or [`WotsSignature::from_bytes`] (which validates the
+/// length for the parameter set).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WotsSignature {
+    bytes: Vec<u8>,
+}
+
+impl WotsSignature {
+    /// The raw `WOTS_SIGN_LEN`-byte signature.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consume the signature, returning the raw bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Copy the raw signature bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+
+    /// Deserialize a signature for parameter set `P`, validating that its length
+    /// is exactly [`Params::WOTS_SIGN_LEN`]. Returns `None` otherwise.
+    pub fn from_bytes<P: Params>(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != P::WOTS_SIGN_LEN {
+            return None;
+        }
+        Some(Self {
+            bytes: bytes.to_vec(),
+        })
+    }
+
+    /// Signature length in bytes.
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Whether the signature is empty (never true for a well-formed signature).
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// Generate a fresh standalone WOTS+C key pair from OS randomness
+/// (signing only).
+///
+/// The 48 random bytes are `sk_seed ‖ sk_prf ‖ pk_seed`; see
+/// [`wots_key_from_seed`] for the deterministic counterpart.
+///
+/// > ⚠️ The result is a **one-time** key: use it for a single message.
+#[cfg(feature = "std")]
+pub fn wots_key_gen<P: Params>() -> Result<WotsSecretKey, Error> {
+    let mut seed = [0u8; 48];
+    getrandom::getrandom(&mut seed).map_err(|_| Error::Random)?;
+    Ok(wots_key_from_seed::<P>(&seed))
+}
+
+/// Deterministically derive a standalone WOTS+C key pair from a 48-byte seed
+/// `sk_seed ‖ sk_prf ‖ pk_seed` (signing only: it recomputes the public root).
+///
+/// The public root is `wots_pk_gen(sk_seed)` under the standalone context, so
+/// this is the exact inverse of [`WotsSecretKey::to_bytes`]'s secret part and
+/// is useful for tests, KATs and restoring a persisted key.
+///
+/// > ⚠️ The result is a **one-time** key: use it for a single message.
+#[cfg(feature = "std")]
+pub fn wots_key_from_seed<P: Params>(seed: &[u8; 48]) -> WotsSecretKey {
+    let mut sk_seed = [0u8; 16];
+    let mut sk_prf = [0u8; 16];
+    let mut pk_seed = [0u8; 16];
+    sk_seed.copy_from_slice(&seed[..16]);
+    sk_prf.copy_from_slice(&seed[16..32]);
+    pk_seed.copy_from_slice(&seed[32..48]);
+
+    let hash_ctx = crate::shrincs::base_ctx(&pk_seed);
+    let mut adrs: Adrs = [0u8; 32];
+    let root = wots_pk_gen::<P>(
+        &sk_seed,
+        &hash_ctx,
+        &mut adrs,
+        STANDALONE_KEYPAIR,
+        STANDALONE_SF,
+    );
+
+    WotsSecretKey {
+        sk_seed,
+        sk_prf,
+        pk: WotsPublicKey { pk_seed, root },
+    }
+}
+
+/// Sign `message` with a standalone WOTS+C key pair (signing only).
+///
+/// Returns a [`WotsSignature`] of [`Params::WOTS_SIGN_LEN`] bytes. Verify it
+/// with [`wots_verify_message`] and the matching [`WotsSecretKey::pk`].
+///
+/// > ⚠️ WOTS+C is a **one-time** signature scheme: signing a second, different
+/// > message with the same key pair reveals the secret key.
+#[cfg(feature = "std")]
+pub fn wots_sign_message<P: Params>(
+    message: &[u8],
+    sk: &WotsSecretKey,
+) -> Result<WotsSignature, Error> {
+    let hash_ctx = crate::shrincs::base_ctx(&sk.pk.pk_seed);
+    let mut adrs: Adrs = [0u8; 32];
+    let bytes = wots_sign::<P>(
+        message,
+        &sk.sk_seed,
+        &sk.sk_prf,
+        &sk.pk.pk_seed,
+        &sk.pk.root,
+        &hash_ctx,
+        &mut adrs,
+        STANDALONE_KEYPAIR,
+        STANDALONE_SF,
+        false,
+    )?;
+    Ok(WotsSignature { bytes })
+}
+
+/// Verify a standalone WOTS+C signature over `message` under `pk`
+/// (`no_std`-safe). Returns `false` on any error, including a malformed
+/// signature length.
+pub fn wots_verify_message<P: Params>(
+    message: &[u8],
+    sig: &WotsSignature,
+    pk: &WotsPublicKey,
+) -> bool {
+    if sig.bytes.len() != P::WOTS_SIGN_LEN {
+        return false;
+    }
+
+    let hash_ctx = crate::shrincs::base_ctx(&pk.pk_seed);
+    let mut adrs: Adrs = [0u8; 32];
+    match wots_pk_from_sig::<P>(
+        &sig.bytes,
+        message,
+        &pk.root,
+        &hash_ctx,
+        &mut adrs,
+        STANDALONE_KEYPAIR,
+        STANDALONE_SF,
+        false,
+    ) {
+        Ok(root) => root == pk.root,
+        Err(_) => false,
+    }
 }

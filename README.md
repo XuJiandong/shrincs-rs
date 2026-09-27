@@ -94,6 +94,34 @@ Notes:
   any key change. A cache from a different key pair yields a wrong result, not
   an error — pass it the matching `sk`.
 
+## WOTS+C (one-time signatures)
+
+The underlying WOTS+C one-time signature scheme is also exposed on its own,
+independent of the stateful/stateless trees:
+
+```rust
+use shrincs::{SHRINCS_B, wots_c};
+
+// Deterministic key generation from a 48-byte seed
+// (`sk_seed ‖ sk_prf ‖ pk_seed`).
+let sk = wots_c::wots_key_from_seed::<SHRINCS_B>(&[0x42u8; 48]);
+
+let sig = wots_c::wots_sign_message::<SHRINCS_B>(b"hello world", &sk).unwrap();
+assert!(wots_c::wots_verify_message::<SHRINCS_B>(b"hello world", &sig, &sk.pk));
+```
+
+* [`wots_key_gen`](wots_c::wots_key_gen) samples a fresh key pair from OS
+  randomness; [`wots_key_from_seed`](wots_c::wots_key_from_seed) derives it
+  deterministically.
+* Key pairs serialize with `WotsSecretKey::to_bytes` / `WotsPublicKey::to_bytes`
+  (64 / 32 bytes); signatures with `WotsSignature::to_bytes` and
+  `WotsSignature::from_bytes::<P>`.
+* Standalone instances use the stateless domain with key-pair address 0 and
+  bind the public root into the message hash.
+* ⚠️ WOTS+C is a **one-time** signature scheme: signing two different messages
+  with the same key pair reveals the secret key. Generate one key pair per
+  message.
+
 ## WebAssembly
 
 Enable the `wasm-nodejs` feature to expose `wasm-bindgen` functions for JavaScript.
