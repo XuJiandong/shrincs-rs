@@ -36,6 +36,7 @@ impl From<wots_c::Error> for Error {
         match e {
             wots_c::Error::DigestInvalid => Error::WotsDigestInvalid,
             wots_c::Error::GrindFailed => Error::WotsGrindFailed,
+            wots_c::Error::Random => Error::Random,
         }
     }
 }

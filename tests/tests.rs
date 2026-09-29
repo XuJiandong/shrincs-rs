@@ -54,6 +54,173 @@ fn wots_sign_verify<P: Params>() {
     assert_eq!(pkey, ex_pkey);
 }
 
+/// The self-contained WOTS+C API must sign and verify a message, and reject a
+/// wrong message, a wrong key and a tampered signature.
+#[test]
+fn wots_standalone_sign_verify_all_variants() {
+    wots_standalone_sign_verify::<SHRINCS_L>();
+    wots_standalone_sign_verify::<SHRINCS_B>();
+    wots_standalone_sign_verify::<SHRINCS_B32>();
+}
+
+fn wots_standalone_sign_verify<P: Params>() {
+    let sk = wots_c::wots_key_from_seed::<P>(&[0x42u8; 48]);
+    let message = b"shrincs wots+c standalone message";
+
+    let sig = wots_c::wots_sign_message::<P>(message, &sk).unwrap();
+    assert_eq!(sig.len(), P::WOTS_SIGN_LEN);
+    assert!(wots_c::wots_verify_message::<P>(message, &sig, &sk.pk));
+
+    // Wrong message.
+    assert!(!wots_c::wots_verify_message::<P>(
+        b"a different message",
+        &sig,
+        &sk.pk
+    ));
+
+    // Wrong key (entirely different seed).
+    let other = wots_c::wots_key_from_seed::<P>(&[0x43u8; 48]);
+    assert_ne!(other.pk, sk.pk);
+    assert!(!wots_c::wots_verify_message::<P>(message, &sig, &other.pk));
+
+    // Public key binding: altering only `pk_seed` or only `root` must fail.
+    let mut bad_seed = sk.pk;
+    bad_seed.pk_seed[0] ^= 0x01;
+    assert!(!wots_c::wots_verify_message::<P>(message, &sig, &bad_seed));
+    let mut bad_root = sk.pk;
+    bad_root.root[0] ^= 0x01;
+    assert!(!wots_c::wots_verify_message::<P>(message, &sig, &bad_root));
+
+    // Tampered signature: flip one bit in `r`, in `ctr`, in the first chain and
+    // in the last chain. Each must be rejected (and must not panic).
+    let raw = sig.to_bytes();
+    for pos in [0, P::R_LEN, P::R_LEN + 3, P::R_LEN + 4, raw.len() - 1] {
+        let mut tampered_raw = raw.clone();
+        tampered_raw[pos] ^= 0x01;
+        let tampered = wots_c::WotsSignature::from_bytes::<P>(&tampered_raw)
+            .expect("tampering must preserve the signature length");
+        assert!(
+            !wots_c::wots_verify_message::<P>(message, &tampered, &sk.pk),
+            "tampered signature accepted at byte {pos}"
+        );
+    }
+}
+
+/// A randomly generated key pair must sign and verify, and its serialized
+/// forms must round-trip into a key/public key that still verify.
+#[test]
+fn wots_standalone_key_gen_sign_verify_all_variants() {
+    wots_standalone_key_gen_sign_verify::<SHRINCS_L>();
+    wots_standalone_key_gen_sign_verify::<SHRINCS_B>();
+    wots_standalone_key_gen_sign_verify::<SHRINCS_B32>();
+}
+
+fn wots_standalone_key_gen_sign_verify<P: Params>() {
+    let sk = wots_c::wots_key_gen::<P>().unwrap();
+    let message = b"random key message";
+
+    let sig = wots_c::wots_sign_message::<P>(message, &sk).unwrap();
+    assert!(wots_c::wots_verify_message::<P>(message, &sig, &sk.pk));
+    assert!(!wots_c::wots_verify_message::<P>(
+        b"other message",
+        &sig,
+        &sk.pk
+    ));
+
+    // Two independent generations yield different keys.
+    let sk2 = wots_c::wots_key_gen::<P>().unwrap();
+    assert!(sk2 != sk);
+    assert!(!wots_c::wots_verify_message::<P>(message, &sig, &sk2.pk));
+
+    // Deserialized keys and signatures still work.
+    let sk_rt = wots_c::WotsSecretKey::from_bytes(&sk.to_bytes()).unwrap();
+    let pk_rt = wots_c::WotsPublicKey::from_bytes(&sk.pk.to_bytes()).unwrap();
+    let sig_rt = wots_c::WotsSignature::from_bytes::<P>(&sig.to_bytes()).unwrap();
+    assert!(wots_c::wots_verify_message::<P>(message, &sig_rt, &pk_rt));
+    assert_eq!(
+        wots_c::wots_sign_message::<P>(message, &sk_rt).unwrap(),
+        sig
+    );
+}
+
+/// The standalone key derivation must use the documented fixed context
+/// (stateless domain, key-pair address 0, all-zero address), and the standalone
+/// verifier must accept a signature produced by the low-level primitive under
+/// that same context.
+#[test]
+fn wots_standalone_matches_low_level_all_variants() {
+    wots_standalone_matches_low_level::<SHRINCS_L>();
+    wots_standalone_matches_low_level::<SHRINCS_B>();
+    wots_standalone_matches_low_level::<SHRINCS_B32>();
+}
+
+fn wots_standalone_matches_low_level<P: Params>() {
+    let message = vec![0u8; 32];
+    let hash_ctx = test_hash_ctx();
+    let mut adrs: Adrs = [0u8; 32];
+
+    // `pk_seed == 0` makes `wots_key_from_seed`'s context equal `test_hash_ctx`.
+    let sk = wots_c::wots_key_from_seed::<P>(&[0u8; 48]);
+    let expected_root = wots_c::wots_pk_gen::<P>(&ZERO_SEED, &hash_ctx, &mut adrs, 0, false);
+    assert_eq!(sk.pk.root, expected_root);
+
+    // A low-level signature under the standalone context verifies as standalone.
+    let raw = wots_c::wots_sign::<P>(
+        &message,
+        &ZERO_SEED,
+        &ZERO_SEED,
+        &ZERO_SEED,
+        &sk.pk.root,
+        &hash_ctx,
+        &mut adrs,
+        0,
+        false,
+        false,
+    )
+    .unwrap();
+    let sig = wots_c::WotsSignature::from_bytes::<P>(&raw).unwrap();
+    assert!(wots_c::wots_verify_message::<P>(&message, &sig, &sk.pk));
+}
+
+/// Key/signature serialization round-trips, and malformed lengths are rejected.
+#[test]
+fn wots_standalone_serialization() {
+    // `wots_key_gen` must be the exact inverse of `wots_key_from_seed` on the
+    // serialized 48-byte seed.
+    let sk = wots_c::wots_key_gen::<SHRINCS_B>().unwrap();
+    let bytes = sk.to_bytes();
+    assert_eq!(bytes.len(), wots_c::WotsSecretKey::SERIALIZED_LEN);
+    let seed: [u8; 48] = bytes[..48].try_into().unwrap();
+    // (`WotsSecretKey` deliberately has no `Debug`, hence `assert!`.)
+    assert!(wots_c::wots_key_from_seed::<SHRINCS_B>(&seed) == sk);
+    assert_eq!(sk.to_bytes(), bytes);
+    assert_eq!(sk.public_key(), &sk.pk);
+
+    // Secret key round-trip.
+    let sk_rt = wots_c::WotsSecretKey::from_bytes(&bytes).expect("valid length");
+    assert!(sk_rt == sk);
+    assert_eq!(sk_rt.to_bytes(), bytes);
+
+    // Public key round-trip.
+    let pk_bytes = sk.pk.to_bytes();
+    assert_eq!(pk_bytes.len(), wots_c::WotsPublicKey::SERIALIZED_LEN);
+    assert_eq!(wots_c::WotsPublicKey::from_bytes(&pk_bytes), Some(sk.pk));
+
+    // Malformed lengths are rejected.
+    assert!(wots_c::WotsSecretKey::from_bytes(&bytes[..bytes.len() - 1]).is_none());
+    assert!(wots_c::WotsPublicKey::from_bytes(&pk_bytes[..16]).is_none());
+
+    // Signature round-trip and length validation (no signing needed).
+    let raw = vec![0u8; SHRINCS_B::WOTS_SIGN_LEN];
+    let sig = wots_c::WotsSignature::from_bytes::<SHRINCS_B>(&raw).unwrap();
+    assert_eq!(sig.len(), raw.len());
+    assert!(!sig.is_empty());
+    assert_eq!(sig.as_bytes(), &raw[..]);
+    assert_eq!(sig.to_bytes(), raw);
+    assert!(wots_c::WotsSignature::from_bytes::<SHRINCS_B>(&raw[..raw.len() - 1]).is_none());
+    assert!(wots_c::WotsSignature::from_bytes::<SHRINCS_B>(&[]).is_none());
+}
+
 #[test]
 fn xmss_sign_verify_all_variants() {
     xmss_sign_verify::<SHRINCS_L>();
